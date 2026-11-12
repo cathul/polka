@@ -82,7 +82,8 @@ Keep the data volume; **do not use `down -v`**. `:latest` tracks stable releases
 
 - `main` tracks original upstream; `develop` contains this fork and is the default branch.
 - Fork version is stored in `VERSION`, independently of upstream numbering.
-- Develop CI runs frontend/Go tests, vet and a two-platform Docker build.
+- Develop CI runs frontend/Go tests, vet and compilation checks; it does not build
+  or publish Docker images.
 - Run **Actions → Fork release → Run workflow** on `develop` to create the release
   tag and publish. Existing tags must point to the same commit.
 - Tags `cathul-v*` also run verification, publish to `ghcr.io/cathul/polka` and create

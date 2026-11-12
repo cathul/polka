@@ -1,6 +1,6 @@
 name: CI
 
-# Develop Docker calls this workflow for develop pushes/PRs to avoid running
+# Develop CI calls this workflow for develop pushes/PRs to avoid running
 # the same complete suite twice for each event.
 
 on:
