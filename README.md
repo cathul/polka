@@ -39,7 +39,7 @@ Go installation or GitHub login is needed to run the public image.
 
 ## Changes in this fork
 
-- Single-container FB2 → EPUB3 email conversion; one administrator SMTP account,
+- FB2 → EPUB3 converter for email delivery; one administrator SMTP account,
   personal recipient addresses, author/title filenames and localized messages.
 - Personal **Want to read** OPDS shelf, using the existing web wishlist.
 - Independent single-language web search and personal OPDS search preference;
