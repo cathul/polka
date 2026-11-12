@@ -51,7 +51,7 @@ Go installation or GitHub login is needed to run the public image.
 - Personal progress removal and refreshed book actions, header, account menu
   and footer. New interface elements support EN/RU.
 
-See [details and migration guide](docs/CUSTOM.md) and [release notes](docs/releases/0.1.md).
+See [release notes](docs/releases/0.1.md).
 The [upstream documentation](docs/UPSTREAM_README.md) describes the original project;
 its download links and Docker image refer to upstream, not this fork.
 
