@@ -83,7 +83,9 @@ Keep the data volume; **do not use `down -v`**. `:latest` tracks stable releases
 - `main` tracks original upstream; `develop` contains this fork and is the default branch.
 - Fork version is stored in `VERSION`, independently of upstream numbering.
 - Develop CI runs frontend/Go tests, vet and a two-platform Docker build.
-- Tags `cathul-v*` run verification, publish to `ghcr.io/cathul/polka` and create
+- Run **Actions → Fork release → Run workflow** on `develop` to create the release
+  tag and publish. Existing tags must point to the same commit.
+- Tags `cathul-v*` also run verification, publish to `ghcr.io/cathul/polka` and create
   a GitHub Release with installation files. The tag version must match `VERSION`.
 - `docker-compose.develop.yml` and `.env.example` provide a separate local trial.
   Use `docker compose -f docker-compose.develop.yml ...` explicitly. The original
