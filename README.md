@@ -1,7 +1,7 @@
 # Polka — cathul fork
 
 Self-hosted ebook library with a web reader, OPDS, KOReader progress synchronization
-and email delivery. Release **0.1**, based on
+and email delivery. Release **0.1.1**, based on
 [vestigiumincaligne/polka v0.1.22](https://github.com/vestigiumincaligne/polka/tree/v0.1.22).
 English and Russian interface.
 
@@ -9,7 +9,7 @@ English and Russian interface.
 
 Requires Docker Engine and Docker Compose v2 or later on Linux amd64 or arm64.
 Download `compose.yaml` from the
-[release](https://github.com/cathul/polka/releases/tag/cathul-v0.1) into an empty directory.
+[release](https://github.com/cathul/polka/releases/tag/cathul-v0.1.1) into an empty directory.
 Create a `.env` file beside `compose.yaml` with your settings:
 
 ```dotenv
@@ -21,8 +21,8 @@ POLKA_BIND_PORT=12791
 The books directory must already exist and be readable by the container user.
 It is mounted read-only at `/books`. Use `POLKA_BIND_IP=0.0.0.0` for LAN access;
 then open `http://SERVER_IP:12791`. For local access use `http://127.0.0.1:12791`.
-A reverse proxy or Cloudflare Tunnel can point to the same HTTP service. Set the
-public address in Polka if your deployment uses a fixed external URL.
+A reverse proxy or Cloudflare Tunnel can point to the same HTTP service.
+Polka derives the public host and protocol from the request headers.
 
 ```sh
 docker compose pull
@@ -51,7 +51,7 @@ Go installation or GitHub login is needed to run the public image.
 - Personal progress removal and refreshed book actions, header, account menu
   and footer. New interface elements support EN/RU.
 
-See [release notes](docs/releases/0.1.md).
+See [release notes](docs/releases/0.1.1.md).
 The [upstream documentation](docs/UPSTREAM_README.md) describes the original project;
 its download links and Docker image refer to upstream, not this fork.
 
@@ -76,7 +76,7 @@ docker compose up -d
 ```
 
 Keep the data volume; **do not use `down -v`**. `:latest` tracks stable releases;
-`:0.1` selects this release. Release source is tagged `cathul-v0.1`.
+`:0.1.1` selects this release. Release source is tagged `cathul-v0.1.1`.
 
 ## Development and publication
 

@@ -341,7 +341,7 @@ func (s *Server) handleOpdsGenre(w http.ResponseWriter, r *http.Request) {
 
 // GET /opds/search?q= — search by title/author/series.
 func (s *Server) handleOpdsSearch(w http.ResponseWriter, r *http.Request) {
-	query := strings.TrimSpace(strings.ReplaceAll(r.URL.Query().Get("q"), "+", " "))
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
 	page := opdsPage(r)
 	books, err := s.st.SearchBooks(r.Context(), query, opdsPageSize+1, page*opdsPageSize, s.opdsSearchLanguage(r))
 	if err != nil {
@@ -352,7 +352,7 @@ func (s *Server) handleOpdsSearch(w http.ResponseWriter, r *http.Request) {
 	if hasMore {
 		books = books[:opdsPageSize]
 	}
-	base := "/opds/search?q=" + strings.ReplaceAll(query, " ", "+")
+	base := "/opds/search?q=" + url.QueryEscape(query)
 	s.writeFeed(w, s.acquisitionFeed("urn:polka:search", tr(reqLang(r), "opds.search", query), base, page, books, hasMore))
 }
 

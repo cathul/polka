@@ -25,7 +25,7 @@ import (
 	"github.com/vestigiumincaligne/polka/web"
 )
 
-var version = "0.1" // overridden at build time via -ldflags
+var version = "0.1.1" // overridden at build time via -ldflags
 
 const usage = `polka — сервер домашней библиотеки
 

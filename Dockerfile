@@ -33,14 +33,14 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=web /src/web/dist ./web/dist
-ARG VERSION=0.1
+ARG VERSION=0.1.1
 # -tags nodynamic: decode JPEG XL covers via the pure-Go wazero backend
 # (no purego/CGO), so the build stays CGO-free across all targets.
 RUN CGO_ENABLED=0 go build -trimpath -tags nodynamic -ldflags "-s -w -X main.version=${VERSION}" -o /polka ./cmd/polka
 
 # --- Runtime ---
 FROM alpine:3.21
-ARG VERSION=0.1
+ARG VERSION=0.1.1
 ARG REVISION=unknown
 LABEL org.opencontainers.image.source="https://github.com/cathul/polka" \
       org.opencontainers.image.version="${VERSION}" \
