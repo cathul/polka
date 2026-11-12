@@ -8,16 +8,12 @@ web/dist
 packaging
 *.md
 
+# Local development tools and test-server data
 .tools
-
 .local-server
 
-# Private server copies and credentials
-polka_old/
-polka.zip
+# Local credentials
 .env
 .env.*
-!.env.example
 **/.env
 **/.env.*
-**/__pycache__

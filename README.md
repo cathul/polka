@@ -65,10 +65,10 @@ The converter sidecar and Cloudflare routing from an older custom installation
 must be changed separately when switching production traffic to this service.
 
 For an existing deployment, keep its volume and configuration and change its
-image to `ghcr.io/cathul/polka:0.1`. The supplied Compose file creates an independent
+image to `ghcr.io/cathul/polka:latest`. The supplied Compose file creates an independent
 `polka-fork` project; it does not automatically adopt existing data.
 
-For subsequent fork versions, select the new version in `compose.yaml`, then:
+The supplied Compose file uses `:latest`. To download and apply the next stable release:
 
 ```sh
 docker compose pull

@@ -1,7 +1,7 @@
 name: polka-fork
 services:
   polka:
-    image: ghcr.io/cathul/polka:0.1
+    image: ghcr.io/cathul/polka:latest
     ports:
       - "${POLKA_BIND_IP:-127.0.0.1}:${POLKA_BIND_PORT:-12791}:12791"
     environment:
