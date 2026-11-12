@@ -18,3 +18,8 @@ android/app/libs/*.jar
 .env
 .env.*
 !.env.example
+
+# Local deployment examples (not distributed)
+/deploy.env.example
+/docker-compose.develop.yml
+/docker-compose.yml

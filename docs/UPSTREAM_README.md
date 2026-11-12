@@ -78,7 +78,7 @@ docker run -d --name polka \
 
 Open `http://localhost:12791`, sign in with the bootstrap admin account
 (created on first run — see the container log: `docker logs polka`), and start
-exploring. Or use [docker-compose.yml](docker-compose.yml):
+exploring. Or use [upstream docker-compose.yml](https://github.com/vestigiumincaligne/polka/blob/v0.1.22/docker-compose.yml):
 
 ```sh
 docker compose up -d

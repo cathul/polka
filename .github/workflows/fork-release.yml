@@ -74,4 +74,4 @@ jobs:
           RELEASE_VERSION: ${{ steps.version.outputs.value }}
         run: |
           gh release create "$RELEASE_TAG" --verify-tag --title "Polka $RELEASE_VERSION" \
-            --notes-file "docs/releases/$RELEASE_VERSION.md" compose.yaml deploy.env.example
+            --notes-file "docs/releases/$RELEASE_VERSION.md" compose.yaml

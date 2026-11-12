@@ -8,9 +8,9 @@ English and Russian interface.
 ## Install with Docker
 
 Requires Docker Engine and Docker Compose v2 or later on Linux amd64 or arm64.
-Download `compose.yaml` and `deploy.env.example` from the
+Download `compose.yaml` from the
 [release](https://github.com/cathul/polka/releases/tag/cathul-v0.1) into an empty directory.
-Copy `deploy.env.example` to `.env` and edit:
+Create a `.env` file beside `compose.yaml` with your settings:
 
 ```dotenv
 POLKA_BOOKS_PATH=/absolute/path/to/books
@@ -87,9 +87,6 @@ Keep the data volume; **do not use `down -v`**. `:latest` tracks stable releases
   tag and publish. Existing tags must point to the same commit.
 - Tags `cathul-v*` also run verification, publish to `ghcr.io/cathul/polka` and create
   a GitHub Release with installation files. The tag version must match `VERSION`.
-- `docker-compose.develop.yml` and `.env.example` provide a separate local trial.
-  Use `docker compose -f docker-compose.develop.yml ...` explicitly. The original
-  `docker-compose.yml` remains available explicitly for upstream.
 - Local `.env`, old server files, test data and build tools are excluded from Git.
 
 The image bundles the pinned [fb2cng](https://github.com/rupor-github/fb2cng)
