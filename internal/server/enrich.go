@@ -51,6 +51,8 @@ func (s *Server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 		},
 		"tastediveKey":      cfg.TasteDiveKey,
 		"opdsEnabled":       s.opdsEnabled(r),
+		"conversionEnabled": s.conversionEnabled(r),
+		"lastInpxPath":      s.st.GetMeta(r.Context(), "last_inpx_path", ""),
 		"smtp":              s.smtpSettings(r),
 		"collectionSources": s.sourcesJSON(r.Context()),
 		"library":           s.libraryStatus(),
@@ -77,12 +79,13 @@ func (s *Server) libraryStatus() map[string]any {
 
 func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Enrichment   map[string]bool `json:"enrichment"`
-		Similar      map[string]bool `json:"similar"`
-		TasteDiveKey *string         `json:"tastediveKey"`
-		OpdsEnabled  *bool           `json:"opdsEnabled"`
-		Smtp         *smtpInput      `json:"smtp"`
-		Sources      map[string]bool `json:"collectionSources"`
+		Enrichment        map[string]bool `json:"enrichment"`
+		Similar           map[string]bool `json:"similar"`
+		TasteDiveKey      *string         `json:"tastediveKey"`
+		OpdsEnabled       *bool           `json:"opdsEnabled"`
+		ConversionEnabled *bool           `json:"conversionEnabled"`
+		Smtp              *smtpInput      `json:"smtp"`
+		Sources           map[string]bool `json:"collectionSources"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
 		http.Error(w, "invalid body", http.StatusBadRequest)
@@ -118,6 +121,12 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.OpdsEnabled != nil {
 		if err := s.users.SetSetting(r.Context(), "opds.enabled", boolVal(*req.OpdsEnabled)); err != nil {
+			s.apiError(w, err)
+			return
+		}
+	}
+	if req.ConversionEnabled != nil {
+		if err := s.users.SetSetting(r.Context(), "delivery.convert_fb2", boolVal(*req.ConversionEnabled)); err != nil {
 			s.apiError(w, err)
 			return
 		}

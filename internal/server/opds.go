@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/xml"
 	"fmt"
 	"net/http"
@@ -229,7 +230,7 @@ func (s *Server) handleOpdsRoot(w http.ResponseWriter, r *http.Request) {
 	if s.currentUser(r) != nil {
 		entries = append(entries, struct {
 			id, title, sub, href, typ string
-		}{"reading", tr(lang, "opds.reading"), tr(lang, "opds.reading.sub"), "/opds/reading", opdsAcqType})
+		}{"reading", tr(lang, "opds.reading"), tr(lang, "opds.reading.sub"), "/opds/reading", opdsAcqType}, struct{ id, title, sub, href, typ string }{"wishlist", "Want to read", tr(lang, "opds.wishlist.sub"), "/opds/wishlist", opdsAcqType})
 	}
 	for _, e := range entries {
 		feed.Entries = append(feed.Entries, opdsEntry{
@@ -342,7 +343,7 @@ func (s *Server) handleOpdsGenre(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleOpdsSearch(w http.ResponseWriter, r *http.Request) {
 	query := strings.TrimSpace(strings.ReplaceAll(r.URL.Query().Get("q"), "+", " "))
 	page := opdsPage(r)
-	books, err := s.st.SearchBooks(r.Context(), query, opdsPageSize+1, page*opdsPageSize)
+	books, err := s.st.SearchBooks(r.Context(), query, opdsPageSize+1, page*opdsPageSize, s.opdsSearchLanguage(r))
 	if err != nil {
 		s.apiError(w, err)
 		return
@@ -531,4 +532,60 @@ func (s *Server) handleOpdsSeriesOne(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeFeed(w, s.acquisitionFeed(fmt.Sprintf("urn:polka:seriesbooks:%d", id), title, fmt.Sprintf("/opds/series/id/%d", id), 0, books, false))
+}
+
+// handleOpdsWishlist exposes the existing personal list, not a separate queue.
+func (s *Server) handleOpdsWishlist(w http.ResponseWriter, r *http.Request) {
+	u := s.currentUser(r)
+	if u == nil {
+		w.Header().Set("WWW-Authenticate", `Basic realm="Polka", charset="UTF-8"`)
+		http.Error(w, "authentication required", http.StatusUnauthorized)
+		return
+	}
+	wl, err := s.users.Wishlist(r.Context(), u.ID)
+	if err != nil {
+		s.apiError(w, err)
+		return
+	}
+	books, more, err := s.wishlistPage(r.Context(), u.ID, wl.ID, opdsPage(r))
+	if err != nil {
+		s.apiError(w, err)
+		return
+	}
+	s.writeFeed(w, s.acquisitionFeed("urn:polka:wishlist", "Want to read", "/opds/wishlist", opdsPage(r), books, more))
+}
+
+// wishlistPage paginates live catalog books. Missing entries remain in the
+// personal list for future reimports but cannot consume visible OPDS pages.
+func (s *Server) wishlistPage(ctx context.Context, userID, listID int64, page int) ([]store.Book, bool, error) {
+	if page > int(^uint(0)>>1)/opdsPageSize {
+		return nil, false, nil
+	}
+	skip := page * opdsPageSize
+	books := make([]store.Book, 0, opdsPageSize+1)
+	for offset := 0; len(books) <= opdsPageSize; {
+		ids, err := s.users.ListBookIDs(ctx, userID, listID, opdsPageSize, offset)
+		if err != nil {
+			return nil, false, err
+		}
+		if len(ids) == 0 {
+			break
+		}
+		offset += len(ids)
+		live, err := s.st.BooksByIDs(ctx, ids)
+		if err != nil {
+			return nil, false, err
+		}
+		for _, book := range live {
+			if skip > 0 {
+				skip--
+				continue
+			}
+			books = append(books, book)
+			if len(books) > opdsPageSize {
+				return books[:opdsPageSize], true, nil
+			}
+		}
+	}
+	return books, false, nil
 }

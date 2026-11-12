@@ -1,0 +1,7 @@
+fb2cng is a separate executable, licensed under GPL-3.0.
+Source used: https://github.com/rupor-github/fb2cng
+Commit: e526f866d30f19aabfb2134204433e1485d4965d
+Source archive: https://github.com/rupor-github/fb2cng/archive/e526f866d30f19aabfb2134204433e1485d4965d.tar.gz
+Matching converter sources, vendored dependencies and generated resources are included in source.tar.gz alongside this file.
+Build instructions: Dockerfile converter stage and build/converter-task.yaml in this repository.
+The converter retains its own license; Polka retains its upstream MIT license.

@@ -80,3 +80,12 @@ describe("HomePage", () => {
     expect(document.querySelector(".homepage__error")).toHaveTextContent(t("home.loadError"));
   });
 });
+
+it("keeps reading cards without a progress removal button on the homepage", async () => {
+ fetchHomeShelves.mockResolvedValue({ shelves: [
+  { id: "reading", books: [{ BookID: 77, Title: "Reading book", ReadingProgress: 0.2 }] },
+ ] });
+ renderHome({});
+ await screen.findByText("Reading book");
+ expect(screen.queryByRole("button", { name: /Убрать из читаемых|Remove from reading/i })).not.toBeInTheDocument();
+});

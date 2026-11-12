@@ -2,9 +2,11 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/mail"
 	"strconv"
 	"strings"
 
@@ -14,7 +16,12 @@ import (
 // Sending a book to an e-reader by e-mail (send-to-Kindle and friends):
 // the admin configures SMTP, each user has their own reader address.
 
-const maxSendBytes = 25 << 20 // attachment cap
+const maxSendBytes = 18 << 20 // Before MIME/base64 expansion.
+const maxSendSourceBytes = 64 << 20
+
+func (s *Server) conversionEnabled(r *http.Request) bool {
+	return s.users.GetSetting(r.Context(), "delivery.convert_fb2", "0") == "1"
+}
 
 // smtpConfig reads the SMTP settings (the password is decrypted).
 func (s *Server) smtpConfig(r *http.Request) mailer.Config {
@@ -60,9 +67,13 @@ func (s *Server) handleReaderEmail(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		email := strings.TrimSpace(req.Email)
-		if email != "" && !strings.Contains(email, "@") {
-			http.Error(w, "invalid email", http.StatusBadRequest)
-			return
+		if email != "" {
+			address, err := mail.ParseAddress(email)
+			if err != nil || strings.ContainsAny(email, "\r\n") {
+				http.Error(w, "invalid email", http.StatusBadRequest)
+				return
+			}
+			email = address.Address
 		}
 		if err := s.users.SetSetting(r.Context(), fmt.Sprintf("reader_email:%d", u.ID), email); err != nil {
 			s.apiError(w, err)
@@ -70,8 +81,9 @@ func (s *Server) handleReaderEmail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, map[string]any{
-		"email":     s.readerEmail(r, u.ID),
-		"smtpReady": s.smtpEnabled(r),
+		"email":             s.readerEmail(r, u.ID),
+		"smtpReady":         s.smtpEnabled(r),
+		"conversionEnabled": s.conversionEnabled(r),
 	})
 }
 
@@ -96,40 +108,53 @@ func (s *Server) handleSendBook(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	var req struct {
+		Format string `json:"format"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		http.Error(w, tr(reqLang(r), "send.invalid"), http.StatusBadRequest)
+		return
+	}
+	if req.Format == "" {
+		req.Format = formatOriginal
+	}
+	if req.Format != formatOriginal && req.Format != formatEPUB3 {
+		http.Error(w, tr(reqLang(r), "send.invalid"), http.StatusBadRequest)
+		return
+	}
+	select {
+	case s.deliverySlots <- struct{}{}:
+		defer func() { <-s.deliverySlots }()
+	default:
+		http.Error(w, tr(reqLang(r), "send.busy"), http.StatusTooManyRequests)
+		return
+	}
 	f, err := s.st.BookFile(r.Context(), bookID)
 	if err != nil {
 		s.apiError(w, err)
 		return
 	}
-	rc, size, err := s.lib.Open(f.Folder, f.File, f.Ext)
+	if req.Format == formatEPUB3 && (!s.conversionEnabled(r) || !isFB2(f.Ext)) {
+		http.Error(w, tr(reqLang(r), "send.unavailable"), http.StatusBadRequest)
+		return
+	}
+	attachment, err := s.prepareDelivery(r.Context(), f, req.Format)
 	if err != nil {
-		s.apiError(w, err)
+		s.deliveryError(w, r, err)
 		return
 	}
-	defer rc.Close()
-	if size > maxSendBytes {
-		http.Error(w, "book is too large to e-mail", http.StatusRequestEntityTooLarge)
-		return
-	}
-	data, err := io.ReadAll(io.LimitReader(rc, maxSendBytes))
-	if err != nil {
-		s.apiError(w, err)
-		return
-	}
-
-	d, _ := s.st.BookDetails(r.Context(), bookID)
-	title := f.File
-	if d != nil && d.Title != "" {
-		title = d.Title
-	}
-	name := sanitizeFileName(title) + "." + f.Ext
 	cfg := s.smtpConfig(r)
-	if err := cfg.Send(to, title, "Polka — "+title, name, data); err != nil {
+	if err := cfg.Send(to, attachment.title, tr(reqLang(r), "send.body"), attachment.name, attachment.data); err != nil {
 		s.log.Warn("send book", "book", bookID, "error", err)
-		http.Error(w, "could not send the book", http.StatusBadGateway)
+		http.Error(w, tr(reqLang(r), "send.smtpFail"), http.StatusBadGateway)
 		return
 	}
-	s.log.Info("book sent", "book", bookID, "to", to)
+	tee := &digestTee{}
+	tee.Write(attachment.data)
+	if err := s.st.SetBookDigestForFile(r.Context(), tee.digest(), f); err != nil {
+		s.log.Warn("sent book digest", "book", bookID, "error", err)
+	}
+	s.log.Info("book sent", "book", bookID)
 	writeJSON(w, map[string]any{"sent": true})
 }
 

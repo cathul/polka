@@ -26,6 +26,7 @@ const SearchPage = ({ config }) => {
 
   const query = searchParams.get("q") ?? "";
   const scope = searchParams.get("scope") ?? "bookTitles";
+  const searchLanguage = query.trim() ? searchParams.get("searchLanguage") ?? "" : "";
   const groupId = searchParams.get("group") ?? null;
 
   const [stats, setStats] = useState(null);
@@ -42,7 +43,7 @@ const SearchPage = ({ config }) => {
     }
     let cancelled = false;
     setLoading(true);
-    const params = { search: query, selectedGroupID: groupId };
+    const params = { search: query, selectedGroupID: groupId, searchLanguage };
 
     fetchSearchStats(params).then((res) => !cancelled && setStats(res?.searchStats ?? null));
 
@@ -63,7 +64,7 @@ const SearchPage = ({ config }) => {
     return () => {
       cancelled = true;
     };
-  }, [query, scope, groupId, enabled]);
+  }, [query, scope, groupId, enabled, searchLanguage]);
 
   // Catalog with no query and no group — show random shelves by genre.
   const [catalogShelves, setCatalogShelves] = useState([]);
@@ -206,7 +207,7 @@ const SearchPage = ({ config }) => {
           {results.map((a) => (
             <li key={a.AuthorID}>
               <Link
-                to={`/author/${a.AuthorID}`}
+                to={`/author/${a.AuthorID}${searchLanguage ? `?searchLanguage=${searchLanguage}` : ""}`}
                 state={{ title: a.Authors }}
                 className="search-page__list-link"
               >
@@ -246,7 +247,7 @@ const SearchPage = ({ config }) => {
           {results.map((s) => (
             <li key={s.SeriesID}>
               <Link
-                to={`/series/${s.SeriesID}`}
+                to={`/series/${s.SeriesID}${searchLanguage ? `?searchLanguage=${searchLanguage}` : ""}`}
                 state={{ title: s.SeriesTitle }}
                 className="search-page__list-link"
               >

@@ -16,6 +16,7 @@ env:
 
 jobs:
   binaries:
+    if: github.repository == 'vestigiumincaligne/polka'
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -64,6 +65,7 @@ jobs:
             polka-desktop-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}
 
   packages:
+    if: github.repository == 'vestigiumincaligne/polka'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -117,6 +119,7 @@ jobs:
             dist/polka-setup-*.exe
 
   docker:
+    if: github.repository == 'vestigiumincaligne/polka'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

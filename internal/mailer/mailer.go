@@ -7,7 +7,10 @@ import (
 	"encoding/base64"
 	"fmt"
 	"mime"
+	"net"
 	"net/smtp"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -90,18 +93,29 @@ func (c Config) deliver(to string, msg []byte) error {
 }
 
 func (c Config) dial() (*smtp.Client, error) {
-	addr := fmt.Sprintf("%s:%d", c.Host, c.Port)
-	if c.Security == "tls" {
-		conn, err := tls.Dial("tcp", addr, &tls.Config{ServerName: c.Host})
-		if err != nil {
-			return nil, fmt.Errorf("tls dial: %w", err)
-		}
-		return smtp.NewClient(conn, c.Host)
-	}
-	client, err := smtp.Dial(addr)
+	addr := net.JoinHostPort(c.Host, strconv.Itoa(c.Port))
+	conn, err := net.DialTimeout("tcp", addr, 30*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("dial: %w", err)
 	}
+	if err := conn.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	if c.Security == "tls" {
+		tlsConn := tls.Client(conn, &tls.Config{ServerName: c.Host, MinVersion: tls.VersionTLS12})
+		if err := tlsConn.Handshake(); err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("tls handshake: %w", err)
+		}
+		conn = tlsConn
+	}
+	client, err := smtp.NewClient(conn, c.Host)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+
 	if c.Security == "starttls" {
 		if err := client.StartTLS(&tls.Config{ServerName: c.Host}); err != nil {
 			client.Close()
@@ -136,9 +150,20 @@ func (c Config) build(to, subject, body, attachName string, attach []byte) []byt
 	b.WriteString(body + "\r\n\r\n")
 
 	fmt.Fprintf(&b, "--%s\r\n", boundary)
-	fmt.Fprintf(&b, "Content-Type: application/octet-stream; name=%q\r\n", attachName)
+	attachmentType := "application/octet-stream"
+	switch strings.ToLower(filepath.Ext(attachName)) {
+	case ".epub":
+		attachmentType = "application/epub+zip"
+	case ".fb2":
+		attachmentType = "application/x-fictionbook+xml"
+	case ".pdf":
+		attachmentType = "application/pdf"
+	case ".txt":
+		attachmentType = "text/plain"
+	}
+	fmt.Fprintf(&b, "Content-Type: %s\r\n", mime.FormatMediaType(attachmentType, map[string]string{"name": attachName}))
 	b.WriteString("Content-Transfer-Encoding: base64\r\n")
-	fmt.Fprintf(&b, "Content-Disposition: attachment; filename=%q\r\n\r\n", attachName)
+	fmt.Fprintf(&b, "Content-Disposition: %s\r\n\r\n", mime.FormatMediaType("attachment", map[string]string{"filename": attachName}))
 	enc64 := base64.StdEncoding.EncodeToString(attach)
 	for i := 0; i < len(enc64); i += 76 {
 		end := i + 76

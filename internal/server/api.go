@@ -230,12 +230,17 @@ func (s *Server) handleGetBooksByIDs(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGetSearchStats(w http.ResponseWriter, r *http.Request) {
 	query := searchParam(r)
 	if store.LooksLikeISBN(query) {
+		books, err := s.st.FilterSearchBooks(r.Context(), s.isbnBooks(r, query), webSearchLanguage(r))
+		if err != nil {
+			s.apiError(w, err)
+			return
+		}
 		writeJSON(w, map[string]any{"searchStats": map[string]int{
-			"bookTitles": len(s.isbnBooks(r, query)), "authors": 0, "bookSeries": 0, "genres": 0,
+			"bookTitles": len(books), "authors": 0, "bookSeries": 0, "genres": 0,
 		}})
 		return
 	}
-	stats, err := s.st.SearchStats(r.Context(), query)
+	stats, err := s.st.SearchStats(r.Context(), query, webSearchLanguage(r))
 	if err != nil {
 		s.apiError(w, err)
 		return
@@ -251,10 +256,15 @@ func (s *Server) handleGetSearchStats(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGetSearchTitles(w http.ResponseWriter, r *http.Request) {
 	query := searchParam(r)
 	if store.LooksLikeISBN(query) {
-		writeJSON(w, map[string]any{"titlesList": booksJSON(s.isbnBooks(r, query))})
+		books, err := s.st.FilterSearchBooks(r.Context(), s.isbnBooks(r, query), webSearchLanguage(r))
+		if err != nil {
+			s.apiError(w, err)
+			return
+		}
+		writeJSON(w, map[string]any{"titlesList": booksJSON(books)})
 		return
 	}
-	books, err := s.st.SearchTitles(r.Context(), query, 250)
+	books, err := s.st.SearchTitles(r.Context(), query, 250, webSearchLanguage(r))
 	if err != nil {
 		s.apiError(w, err)
 		return
@@ -263,7 +273,7 @@ func (s *Server) handleGetSearchTitles(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetSearchAuthors(w http.ResponseWriter, r *http.Request) {
-	authors, err := s.st.SearchAuthors(r.Context(), searchParam(r), 250)
+	authors, err := s.st.SearchAuthors(r.Context(), searchParam(r), 250, webSearchLanguage(r))
 	if err != nil {
 		s.apiError(w, err)
 		return
@@ -276,7 +286,7 @@ func (s *Server) handleGetSearchAuthors(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleGetSearchSeries(w http.ResponseWriter, r *http.Request) {
-	series, err := s.st.SearchSeries(r.Context(), searchParam(r), 250)
+	series, err := s.st.SearchSeries(r.Context(), searchParam(r), 250, webSearchLanguage(r))
 	if err != nil {
 		s.apiError(w, err)
 		return
@@ -294,7 +304,7 @@ func (s *Server) handleGetAuthorBooks(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "selectedItemID required", http.StatusBadRequest)
 		return
 	}
-	books, name, err := s.st.AuthorBooks(r.Context(), id)
+	books, name, err := s.st.AuthorBooks(r.Context(), id, webSearchLanguage(r))
 	if err != nil {
 		s.apiError(w, err)
 		return
@@ -308,7 +318,7 @@ func (s *Server) handleGetSeriesBooks(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "selectedItemID required", http.StatusBadRequest)
 		return
 	}
-	books, title, err := s.st.SeriesBooks(r.Context(), id)
+	books, title, err := s.st.SeriesBooks(r.Context(), id, webSearchLanguage(r))
 	if err != nil {
 		s.apiError(w, err)
 		return
@@ -458,7 +468,7 @@ func (s *Server) handleBookDownload(w http.ResponseWriter, r *http.Request) {
 	// e-ink devices (kosync) can be matched back to this book.
 	tee := &digestTee{}
 	copied, _ := io.Copy(io.MultiWriter(w, tee), rc)
-	s.recordDigest(tee, f.ID, size, copied)
+	s.recordDigest(tee, f, size, copied)
 }
 
 func (s *Server) handleBookZip(w http.ResponseWriter, r *http.Request) {

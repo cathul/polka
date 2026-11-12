@@ -21,6 +21,16 @@ func reqLang(r *http.Request) string {
 
 var serverStrings = map[string]map[string]string{
 	"ru": {
+		"send.body":        "Книга отправлена сервером Polka",
+		"send.noLibrary":   "Не настроен каталог с файлами книг",
+		"send.smtpFail":    "Не удалось отправить письмо через SMTP",
+		"send.invalid":     "Некорректный формат отправки",
+		"send.busy":        "Отправка занята, попробуйте позже",
+		"send.unavailable": "Конвертация недоступна для этой книги или отключена администратором",
+		"send.large":       "Пустой файл или превышен допустимый размер книги",
+		"send.convertFail": "Не удалось преобразовать FB2 в EPUB3",
+
+		"opds.wishlist.sub":    "Книги из вашего списка «Хочу прочитать»",
 		"shelf.reading":        "Читаю сейчас",
 		"shelf.wishlist":       "Хочу прочитать",
 		"shelf.offline":        "Доступно офлайн",
@@ -50,6 +60,16 @@ var serverStrings = map[string]map[string]string{
 		"upload.dup.text":      "книга с тем же текстом уже в библиотеке",
 	},
 	"en": {
+		"send.body":        "Book sent by the Polka server",
+		"send.noLibrary":   "The book library directory is not configured",
+		"send.smtpFail":    "Could not send the email through SMTP",
+		"send.invalid":     "Invalid delivery format",
+		"send.busy":        "Delivery is busy; try again later",
+		"send.unavailable": "Conversion is unavailable for this book or disabled by the administrator",
+		"send.large":       "The file is empty or exceeds the book size limit",
+		"send.convertFail": "Could not convert FB2 to EPUB3",
+
+		"opds.wishlist.sub":    "Books from your personal Want to read list",
 		"shelf.reading":        "Reading now",
 		"shelf.wishlist":       "Want to read",
 		"shelf.offline":        "Available offline",

@@ -7,3 +7,17 @@ web/node_modules
 web/dist
 packaging
 *.md
+
+.tools
+
+.local-server
+
+# Private server copies and credentials
+polka_old/
+polka.zip
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+**/__pycache__

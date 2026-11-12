@@ -16,3 +16,7 @@ globalThis.ResizeObserver = globalThis.ResizeObserver ?? ResizeObserverStub;
 Element.prototype.scrollBy = Element.prototype.scrollBy ?? function () {};
 
 afterEach(() => cleanup());
+
+// Use jsdom's browser storage rather than Node's optional Web Storage globals.
+Object.defineProperty(globalThis, "localStorage", { value: jsdom.window.localStorage, configurable: true });
+Object.defineProperty(globalThis, "sessionStorage", { value: jsdom.window.sessionStorage, configurable: true });

@@ -6,12 +6,15 @@ import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { fetchProgress, localProgress, saveProgress } from "../api/reader";
 import "./ReaderPage.css";
 import "./PdfReader.css";
+import { restorePdfPage } from "./readerPosition";
+import { useReadingActivity } from "./useReadingActivity";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 
 // PDF reader: a continuous strip of pages rendered while scrolling,
 // progress = page number.
 const PdfReader = ({ bookId, meta }) => {
+  const readingActivity = useReadingActivity(bookId);
   const [doc, setDoc] = useState(null);
   const [numPages, setNumPages] = useState(0);
   const [pageSize, setPageSize] = useState(null); // approximate dimensions for placeholders
@@ -35,7 +38,8 @@ const PdfReader = ({ bookId, meta }) => {
         if (cancelled) return;
         serverStored.current = Boolean(prog?.stored);
         const saved = prog?.stored ? prog : localProgress.get(bookId);
-        restoreTo.current = Math.min(Math.max(1, Number(saved?.chapter ?? 1)), pdf.numPages);
+        restoreTo.current = restorePdfPage(saved, pdf.numPages);
+        setCurrent(restoreTo.current);
 
         const page1 = await pdf.getPage(1);
         const vp = page1.getViewport({ scale: 1 });
@@ -51,6 +55,7 @@ const PdfReader = ({ bookId, meta }) => {
   }, [bookId, meta.fileUrl]);
 
   const persist = (page) => {
+    if (!readingActivity.current) return;
     const overall = numPages > 0 ? page / numPages : 0;
     if (serverStored.current) {
       saveProgress(bookId, page, 0, overall, "");
@@ -106,6 +111,7 @@ const PdfReader = ({ bookId, meta }) => {
     const onScroll = () => {
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(() => {
+        if (!readingActivity.current) return;
         const anchor = window.scrollY + window.innerHeight * 0.4;
         let page = 1;
         for (const h of holders) {

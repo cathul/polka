@@ -71,18 +71,17 @@ func (s *Store) AddBook(ctx context.Context, b *BookInput) (int64, error) {
 		year = b.Year
 	}
 
-	res, err := tx.ExecContext(ctx, `
-		INSERT INTO books (lib_id, title, series_id, series_num, folder_id, file, ext, size, lang, year, added, lib_rate, deleted, file_hash, content_hash, isbn)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
-		b.LibID, b.Title, seriesID, seriesNum, folderID, b.File, b.Ext, b.Size, b.Lang, year, b.Added, b.Rate, b.FileHash, b.ContentHash, NormalizeISBN(b.ISBN))
+	bookID, err := reserveBookID(ctx, tx, b)
 	if err != nil {
 		return 0, err
 	}
-	bookID, err := res.LastInsertId()
+	_, err = tx.ExecContext(ctx, `
+  INSERT INTO books (id, lib_id, title, series_id, series_num, folder_id, file, ext, size, lang, year, added, lib_rate, deleted, file_hash, content_hash, isbn)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
+		bookID, b.LibID, b.Title, seriesID, seriesNum, folderID, b.File, b.Ext, b.Size, b.Lang, year, b.Added, b.Rate, b.FileHash, b.ContentHash, NormalizeISBN(b.ISBN))
 	if err != nil {
 		return 0, err
 	}
-
 	var authorNames []string
 	for _, a := range b.Authors {
 		name := strings.TrimSpace(a.Last + " " + a.First + " " + a.Middle)
@@ -161,20 +160,35 @@ func (s *Store) SetBookDeleted(ctx context.Context, bookID int64, deleted bool) 
 	return err
 }
 
-// Clear empties the collection (for re-import on a running server).
-// The user database and meta are not touched.
+// Clear atomically detaches digests before catalog IDs can be reused.
+// File identities and user data are retained even if the subsequent import fails.
 func (s *Store) Clear(ctx context.Context) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, identitySchema); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE book_digests SET book_id=NULL`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO meta(key,value) VALUES('digest_import_pending','1')
+ ON CONFLICT(key) DO UPDATE SET value='1'`); err != nil {
+		return err
+	}
 	tables := []string{
 		"book_search", "authors_search", "series_search",
 		"book_authors", "book_genres", "book_keywords",
-		"books", "authors", "series", "genres", "keywords", "folders", "book_digests",
+		"books", "authors", "series", "genres", "keywords", "folders",
 	}
 	for _, table := range tables {
-		if _, err := s.db.ExecContext(ctx, `DELETE FROM `+table); err != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM `+table); err != nil {
 			return fmt.Errorf("clear %s: %w", table, err)
 		}
 	}
-	return nil
+	return tx.Commit()
 }
 
 // FindByHash looks up a live book by an exact match of the file hash or
@@ -194,24 +208,6 @@ func (s *Store) FindByHash(ctx context.Context, column, hash string) (*Book, err
 		return nil, ErrNotFound
 	}
 	return &books[0], nil
-}
-
-// SetBookDigest remembers a KOReader-style digest of a served book file.
-func (s *Store) SetBookDigest(ctx context.Context, digest string, bookID int64) error {
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO book_digests (digest, book_id) VALUES (?, ?)
-		ON CONFLICT (digest) DO UPDATE SET book_id = excluded.book_id`, digest, bookID)
-	return err
-}
-
-// BookIDByDigest maps a KOReader document digest back to a book.
-func (s *Store) BookIDByDigest(ctx context.Context, digest string) (int64, error) {
-	var id int64
-	err := s.db.QueryRowContext(ctx, `SELECT book_id FROM book_digests WHERE digest = ?`, digest).Scan(&id)
-	if errors.Is(err, sql.ErrNoRows) {
-		return 0, ErrNotFound
-	}
-	return id, err
 }
 
 // normalizeForMatch normalizes a string for metadata comparison:
@@ -310,7 +306,7 @@ func (s *Store) BookFilesByIDs(ctx context.Context, ids []int64) ([]BookFile, er
 		args[i] = id
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT b.id, b.title, fo.name, b.file, b.ext, b.size
+		SELECT b.id, b.title, fo.name, b.file, b.ext, b.size, b.lib_id
 		FROM books b JOIN folders fo ON fo.id = b.folder_id
 		WHERE b.deleted = 0 AND b.id IN (`+placeholders+`)`, args...)
 	if err != nil {
@@ -321,7 +317,7 @@ func (s *Store) BookFilesByIDs(ctx context.Context, ids []int64) ([]BookFile, er
 	var files []BookFile
 	for rows.Next() {
 		var f BookFile
-		if err := rows.Scan(&f.ID, &f.Title, &f.Folder, &f.File, &f.Ext, &f.Size); err != nil {
+		if err := rows.Scan(&f.ID, &f.Title, &f.Folder, &f.File, &f.Ext, &f.Size, &f.LibID); err != nil {
 			return nil, err
 		}
 		files = append(files, f)

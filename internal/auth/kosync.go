@@ -71,14 +71,15 @@ func (s *Service) GetByLogin(ctx context.Context, login string) (*User, error) {
 // KosyncUpdate stores a document position and returns the server timestamp.
 func (s *Service) KosyncUpdate(ctx context.Context, userID int64, p *KosyncProgress) (int64, error) {
 	ts := time.Now().Unix()
-	_, err := s.db.ExecContext(ctx, `
+	err := s.db.QueryRowContext(ctx, `
 		INSERT INTO kosync_progress (user_id, document, progress, percentage, device, device_id, timestamp)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (user_id, document) DO UPDATE SET
 			progress = excluded.progress, percentage = excluded.percentage,
 			device = excluded.device, device_id = excluded.device_id,
-			timestamp = excluded.timestamp`,
-		userID, p.Document, p.Progress, p.Percentage, p.Device, p.DeviceID, ts)
+			timestamp = max(excluded.timestamp,kosync_progress.timestamp+1)
+        RETURNING timestamp`,
+		userID, p.Document, p.Progress, p.Percentage, p.Device, p.DeviceID, ts).Scan(&ts)
 	return ts, err
 }
 
@@ -95,15 +96,36 @@ func (s *Service) KosyncGet(ctx context.Context, userID int64, document string) 
 	return p, err
 }
 
-// SaveOverall updates only the overall fraction of the reading progress
+// SaveOverall stores the device fraction and marks web coordinates as stale
 // (a device that knows nothing about our chapters reported the position);
-// chapter, position and locator of an existing record are preserved.
+// Old chapter/position values are retained, but the locator marks them as stale:
+// the web reader must restore approximately from the new overall percentage.
 func (s *Service) SaveOverall(ctx context.Context, userID, bookID int64, overall float64) error {
-	_, err := s.db.ExecContext(ctx, `
+	return s.SaveDeviceOverall(ctx, userID, bookID, overall, "kosync:overall")
+}
+
+// locator retains the device's opaque position without parsing a book on push.
+func (s *Service) SaveDeviceOverall(ctx context.Context, userID, bookID int64, overall float64, locator string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	timestamp, err := progressTimestamp(ctx, tx, userID, bookID)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO reading_progress (user_id, book_id, chapter, position, overall, locator, updated_at)
-		VALUES (?, ?, 0, 0, ?, '', strftime('%Y-%m-%d %H:%M:%f', 'now'))
+		VALUES (?, ?, 0, 0, ?, ?, ?)
 		ON CONFLICT (user_id, book_id) DO UPDATE
-		SET overall = excluded.overall, updated_at = excluded.updated_at`,
-		userID, bookID, overall)
-	return err
+		SET overall = excluded.overall, locator = excluded.locator, updated_at = excluded.updated_at`,
+		userID, bookID, overall, locator, timestamp)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM reading_progress_deleted WHERE user_id=? AND book_id=?`, userID, bookID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

@@ -1,6 +1,6 @@
 .PHONY: all web build run test clean
 
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+VERSION ?= $(shell cat VERSION)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
 # nodynamic: decode JPEG XL covers via the pure-Go wazero backend (no

@@ -77,6 +77,7 @@ const Shelf = ({ title, subtitle, books = [], emptyHint, onSeeAll }) => {
           {books.map((book) => (
             <div key={book.BookID} className="shelf__item">
               <BookCard book={book} />
+
             </div>
           ))}
         </div>

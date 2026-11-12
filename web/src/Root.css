@@ -1,11 +1,13 @@
 .root-main {
+  padding-top: 24px;
+  padding-bottom: 48px;
   min-height: calc(100vh - var(--header-h) - 64px);
 }
 
 .root-footer {
   border-top: 1px solid var(--border);
   background: var(--bg-card);
-  padding: 16px 0;
+  padding: 20px 0;
   font-size: 13px;
   color: var(--fg-muted);
 }
@@ -26,3 +28,29 @@
   font-family: var(--mono, monospace);
   font-size: 0.9em;
 }
+
+.root-footer .root-footer__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.root-footer__identity { line-height: 1.6; }
+.root-footer__version { white-space: nowrap; }
+
+.root-footer__github {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 42px;
+  height: 42px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+  color: var(--fg);
+  transition: background .15s ease, border-color .15s ease;
+}
+.root-footer__github:hover { background: var(--bg-muted); border-color: var(--border-strong); }
+.root-footer__github:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 3px; }

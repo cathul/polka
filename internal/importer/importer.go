@@ -23,13 +23,6 @@ func ImportInpx(ctx context.Context, log *slog.Logger, st *store.Store, path str
 	}
 	defer f.Close()
 
-	if name := f.CollectionName(); name != "" {
-		if err := st.SetMeta(ctx, "collection_name", name); err != nil {
-			return stats, err
-		}
-		log.Info("collection", "name", name)
-	}
-
 	session, err := st.NewImport(ctx)
 	if err != nil {
 		return stats, err
@@ -60,7 +53,17 @@ func ImportInpx(ctx context.Context, log *slog.Logger, st *store.Store, path str
 	if onProgress != nil {
 		onProgress("indexing", processed)
 	}
-	return session.Finish()
+	stats, err = session.Finish()
+	if err != nil {
+		return stats, err
+	}
+	if name := f.CollectionName(); name != "" {
+		if err := st.SetMeta(ctx, "collection_name", name); err != nil {
+			return stats, err
+		}
+		log.Info("collection", "name", name)
+	}
+	return stats, nil
 }
 
 func toBookInput(rec *inpx.Record) *store.BookInput {
@@ -85,4 +88,14 @@ func toBookInput(rec *inpx.Record) *store.BookInput {
 		b.Authors = append(b.Authors, store.AuthorName{Last: a.Last, First: a.First, Middle: a.Middle})
 	}
 	return b
+}
+
+// ValidateInpx checks the container before destructive replacement starts.
+// Record-level errors can still fail a later batched import.
+func ValidateInpx(path string) error {
+	f, err := inpx.Open(path)
+	if err != nil {
+		return err
+	}
+	return f.Close()
 }

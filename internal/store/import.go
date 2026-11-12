@@ -73,12 +73,17 @@ const importBatchSize = 25_000
 // NewImport starts an import session. The database must be empty —
 // incremental collection updates will come as a separate operation.
 func (s *Store) NewImport(ctx context.Context) (*ImportSession, error) {
-	n, err := s.BookCount(ctx)
+	n, err := s.CatalogCount(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if n > 0 {
 		return nil, fmt.Errorf("library is not empty (%d books); use --replace to reimport", n)
+	}
+
+	// Incomplete first imports must be as safe as incomplete replace imports.
+	if err := s.SetMeta(ctx, "digest_import_pending", "1"); err != nil {
+		return nil, err
 	}
 
 	// Indexes only get in the way during bulk loading.
@@ -126,11 +131,15 @@ func (im *ImportSession) begin() error {
 		author:  prep(`INSERT INTO authors (last_name, first_name, middle_name) VALUES (?, ?, ?)`),
 		genre:   prep(`INSERT INTO genres (code) VALUES (?)`),
 		keyword: prep(`INSERT INTO keywords (name) VALUES (?)`),
-		book: prep(`INSERT INTO books (lib_id, title, series_id, series_num, folder_id, file, ext, size, lang, year, added, lib_rate, deleted)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+		book: prep(`INSERT INTO books (id, lib_id, title, series_id, series_num, folder_id, file, ext, size, lang, year, added, lib_rate, deleted)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
 		ba: prep(`INSERT OR IGNORE INTO book_authors (book_id, author_id) VALUES (?, ?)`),
 		bg: prep(`INSERT OR IGNORE INTO book_genres (book_id, genre_id) VALUES (?, ?)`),
 		bk: prep(`INSERT OR IGNORE INTO book_keywords (book_id, keyword_id) VALUES (?, ?)`),
+	}
+	if err != nil {
+		tx.Rollback()
+		im.tx = nil
 	}
 	return err
 }
@@ -182,16 +191,15 @@ func (im *ImportSession) Add(b *BookInput) error {
 		year = b.Year
 	}
 
-	res, err := im.stmts.book.Exec(b.LibID, b.Title, seriesID, seriesNum, folderID,
+	bookID, err := reserveBookID(im.ctx, im.tx, b)
+	if err != nil {
+		return err
+	}
+	_, err = im.stmts.book.Exec(bookID, b.LibID, b.Title, seriesID, seriesNum, folderID,
 		b.File, b.Ext, b.Size, b.Lang, year, b.Added, b.Rate, boolToInt(b.Deleted))
 	if err != nil {
 		return fmt.Errorf("book %q: %w", b.Title, err)
 	}
-	bookID, err := res.LastInsertId()
-	if err != nil {
-		return err
-	}
-
 	for _, a := range b.Authors {
 		id, ok := im.authors[a]
 		if !ok {
@@ -284,6 +292,9 @@ func (im *ImportSession) Finish() (ImportStats, error) {
 		return im.stats, err
 	}
 
+	if err := im.s.rematchDigests(im.ctx); err != nil {
+		return im.stats, fmt.Errorf("rematch digests: %w", err)
+	}
 	im.stats.Authors = len(im.authors)
 	im.stats.Series = len(im.series)
 	im.stats.Genres = len(im.genres)

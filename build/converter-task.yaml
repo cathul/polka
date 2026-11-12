@@ -1,0 +1,54 @@
+version: '3'
+includes:
+  upstream:
+    taskfile: ./Taskfile.yaml
+    dir: .
+tasks:
+  build:
+    deps:
+      - upstream:generate-project-version
+      - dictionaries
+      - upstream:get-sentences
+      - upstream:get-pdf-fonts
+      - upstream:generate-enums
+    cmds:
+      - go build -mod=vendor -trimpath -o '{{default "/out/fbc" (env "FBC_OUTPUT")}}' ./cmd/fbc
+  dictionaries:
+    internal: true
+    run: once
+    cmds:
+      - |
+        set -eu
+        tmp="$(mktemp -d)"
+        trap 'rm -rf "$tmp"' EXIT
+        downloaded=0
+        for url in \
+          https://mirrors.ibiblio.org/CTAN/language/hyphenation-utf8.zip \
+          https://ctan.math.illinois.edu/language/hyphenation-utf8.zip \
+          https://mirrors.ctan.org/language/hyphenation-utf8.zip; do
+          echo "Downloading hyphenation dictionaries: $url"
+          if curl --fail --location --show-error \
+              --connect-timeout 20 --max-time 180 \
+              --retry 2 --retry-delay 3 --retry-all-errors \
+              "$url" -o "$tmp/dictionaries.zip"; then
+            if unzip -tq "$tmp/dictionaries.zip"; then
+              downloaded=1
+              break
+            fi
+          fi
+          echo "Mirror failed; trying next mirror"
+        done
+        if [ "$downloaded" -ne 1 ]; then
+          echo "All CTAN mirrors failed" >&2
+          exit 1
+        fi
+        mkdir -p "$tmp/patterns" content/text/dictionaries
+        unzip -q -j "$tmp/dictionaries.zip" \
+          'hyph-utf8/tex/patterns/txt/hyph-*.pat.txt' \
+          'hyph-utf8/tex/patterns/txt/hyph-*.hyp.txt' \
+          -d "$tmp/patterns"
+        gzip -q -f "$tmp/patterns"/hyph-*.txt
+        count="$(find "$tmp/patterns" -name 'hyph-*.txt.gz' | wc -l)"
+        test "$count" -ge 90
+        cp "$tmp/patterns"/hyph-*.txt.gz content/text/dictionaries/
+        echo "Hyphenation dictionaries ready: $count files"

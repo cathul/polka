@@ -29,7 +29,7 @@ import (
 	"github.com/vestigiumincaligne/polka/web"
 )
 
-var version = "dev" // overridden at build time via -ldflags
+var version = "0.1" // overridden at build time via -ldflags
 
 func main() {
 	// The native window (WebView2) must live on the OS main thread.

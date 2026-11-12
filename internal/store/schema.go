@@ -3,9 +3,30 @@ package store
 // The schema version is stored in PRAGMA user_version.
 const schemaVersion = 4
 
+// Custom migration 1: retain the identity of a served file independently of catalog row IDs.
+// Unresolved digests remain durable with NULL book_id, including legacy orphans.
+const schemaDigestIdentityV1 = `
+CREATE TABLE book_digests_new (
+ digest TEXT PRIMARY KEY,
+ book_id INTEGER,
+ folder TEXT,
+ file TEXT,
+ ext TEXT,
+ size INTEGER,
+ lib_id TEXT
+) WITHOUT ROWID;
+INSERT INTO book_digests_new (digest, book_id, folder, file, ext, size, lib_id)
+ SELECT d.digest, b.id, f.name, b.file, b.ext, b.size, b.lib_id
+ FROM book_digests d LEFT JOIN books b ON b.id=d.book_id
+ LEFT JOIN folders f ON f.id=b.folder_id;
+DROP TABLE book_digests;
+ALTER TABLE book_digests_new RENAME TO book_digests;
+CREATE INDEX IF NOT EXISTS idx_books_digest_identity ON books(folder_id,file,ext,size,lib_id);
+`
+
 // v4: KOReader partial-MD5 digests of served book files — the bridge
-// between kosync documents and catalog books. Recomputed lazily (on
-// download), so a re-import simply starts collecting them again.
+// between kosync documents and catalog books. The custom migration preserves these
+// across imports; the legacy definition is retained for migration.
 const schemaV4 = `
 CREATE TABLE book_digests (
 	digest  TEXT PRIMARY KEY,
@@ -129,6 +150,7 @@ CREATE VIRTUAL TABLE series_search USING fts5(
 // Indexes are kept separate: during bulk import it is cheaper to
 // build them after the data is loaded than to maintain them on every insert.
 var schemaIndexes = []string{
+	`CREATE INDEX IF NOT EXISTS idx_books_digest_identity ON books(folder_id,file,ext,size,lib_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_books_series ON books (series_id) WHERE series_id IS NOT NULL`,
 	`CREATE INDEX IF NOT EXISTS idx_books_folder ON books (folder_id)`,
 	// (added, id) and (lib_rate, id) serve shelf ORDER BYs: a reverse index

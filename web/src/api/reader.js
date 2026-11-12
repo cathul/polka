@@ -5,7 +5,7 @@ export const fetchReadMeta = (bookId) => api.getJson(`api/v1/read/${bookId}`);
 
 export const fetchChapter = (bookId, n) => api.getJson(`api/v1/read/${bookId}/chapter/${n}`);
 
-export const fetchProgress = (bookId) => api.getJson(`api/v1/read/${bookId}/progress`);
+export const fetchProgress = (bookId, resolve = false) => api.getJson(`api/v1/read/${bookId}/progress${resolve ? "?resolve=1" : ""}`);
 
 export const saveProgress = (bookId, chapter, position, progress, locator = "") =>
   fetch(api.buildUrl(`api/v1/read/${bookId}/progress`), {
@@ -44,3 +44,20 @@ export const saveReaderPrefs = (prefs) =>
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(prefs),
   });
+
+export const removeProgress = async (bookId) => {
+  const res = await fetch(api.buildUrl(`api/v1/read/${bookId}/progress`), {
+    method: "DELETE",
+    credentials: "include",
+    headers: { "X-Polka-Lang": getLang() },
+  });
+  if (!res.ok) throw new Error("Could not remove reading progress");
+  const result = await res.json();
+  if (result.removed !== true) throw new Error("Progress deletion was not confirmed");
+  try {
+    localStorage.removeItem(`polka-read-${bookId}`);
+  } catch {
+    // Server progress was removed even when browser storage is disabled.
+  }
+  return result;
+};

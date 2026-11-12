@@ -22,21 +22,21 @@ export const fetchCatalogShelves = ({ limit, count } = {}) =>
 export const fetchShelfBooks = ({ shelfId, limit, offset } = {}) =>
   get("getShelfBooks", { shelfId, limit, offset });
 
-export const fetchSearchStats = ({ search, selectedGroupID } = {}) => get("getSearchStats", { search, selectedGroupID });
+export const fetchSearchStats = ({ search, selectedGroupID, searchLanguage } = {}) => get("getSearchStats", { search, selectedGroupID, searchLanguage });
 
-export const fetchSearchTitles = ({ search, selectedGroupID } = {}) => get("getSearchTitles", { search, selectedGroupID });
+export const fetchSearchTitles = ({ search, selectedGroupID, searchLanguage } = {}) => get("getSearchTitles", { search, selectedGroupID, searchLanguage });
 
-export const fetchSearchAuthors = ({ search, selectedGroupID } = {}) => get("getSearchAuthors", { search, selectedGroupID });
+export const fetchSearchAuthors = ({ search, selectedGroupID, searchLanguage } = {}) => get("getSearchAuthors", { search, selectedGroupID, searchLanguage });
 
-export const fetchSearchSeries = ({ search, selectedGroupID } = {}) => get("getSearchSeries", { search, selectedGroupID });
+export const fetchSearchSeries = ({ search, selectedGroupID, searchLanguage } = {}) => get("getSearchSeries", { search, selectedGroupID, searchLanguage });
 
 export const fetchSearchGenres = ({ search } = {}) => get("getSearchGenres", { search });
 
-export const fetchAuthorBooks = ({ selectedItemID, selectedGroupID } = {}) =>
-  get("getSearchAuthorBooks", { selectedItemID, selectedGroupID });
+export const fetchAuthorBooks = ({ selectedItemID, selectedGroupID, searchLanguage } = {}) =>
+  get("getSearchAuthorBooks", { selectedItemID, selectedGroupID, searchLanguage });
 
-export const fetchSeriesBooks = ({ selectedItemID, selectedGroupID } = {}) =>
-  get("getSearchSeriesBooks", { selectedItemID, selectedGroupID });
+export const fetchSeriesBooks = ({ selectedItemID, selectedGroupID, searchLanguage } = {}) =>
+  get("getSearchSeriesBooks", { selectedItemID, selectedGroupID, searchLanguage });
 
 export const fetchBookForm = ({ selectedItemID } = {}) => get("getBookForm", { selectedItemID });
 

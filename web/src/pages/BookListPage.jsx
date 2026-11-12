@@ -24,6 +24,8 @@ const BookListPage = ({ kind }) => {
     kind === "author" ? params.authorId : kind === "series" ? params.seriesId : params.shelfId;
   const location = useLocation();
   const navigate = useNavigate();
+  // Only links from a filtered search carry this parameter.
+  const searchLanguage = new URLSearchParams(location.search).get("searchLanguage") ?? "";
 
   const passedTitle = location.state?.title;
   const fetcher = FETCHERS[kind];
@@ -45,7 +47,7 @@ const BookListPage = ({ kind }) => {
     setResolvedTitle("");
     setHasMore(false);
     setNextOffset(0);
-    const params = kind === "shelf" ? { shelfId: id } : { selectedItemID: id };
+    const params = kind === "shelf" ? { shelfId: id } : { selectedItemID: id, searchLanguage };
     fetcher(params)
       .then((res) => {
         if (cancelled) return;
@@ -61,7 +63,7 @@ const BookListPage = ({ kind }) => {
     return () => {
       cancelled = true;
     };
-  }, [id, kind]);
+  }, [id, kind, searchLanguage]);
 
   const sortedBooks =
     kind === "series"

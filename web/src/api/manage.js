@@ -40,7 +40,7 @@ export const restoreBook = (id) => post(`admin/books/${id}/restore`);
 export const importInpx = ({ file, path, replace } = {}) => {
   const fd = new FormData();
   if (file) fd.append("file", file);
-  if (path) fd.append("path", path);
+  else if (path) fd.append("path", path);
   if (replace) fd.append("replace", "1");
   return postForm("admin/import/inpx", fd);
 };

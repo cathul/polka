@@ -23,12 +23,14 @@ type Book struct {
 
 // BookFile holds the data needed to serve a book file.
 type BookFile struct {
-	ID     int64
-	Title  string
-	Folder string
-	File   string
-	Ext    string
-	Size   int64
+	AuthorNames string
+	LibID       string
+	ID          int64
+	Title       string
+	Folder      string
+	File        string
+	Ext         string
+	Size        int64
 }
 
 // BookDetails is the full book card.
@@ -153,10 +155,26 @@ type SearchStats struct {
 	BookTitles, Authors, BookSeries int
 }
 
-func (s *Store) SearchStats(ctx context.Context, query string) (SearchStats, error) {
+func (s *Store) SearchStats(ctx context.Context, query string, language ...string) (SearchStats, error) {
 	var st SearchStats
 	titleQ, plainQ := ftsQuery(query, "title"), ftsQuery(query, "")
 	if plainQ == "" {
+		return st, nil
+	}
+	if filter := searchLanguageFilter(language); filter != "1" {
+		queries := []struct {
+			sql, query string
+			count      *int
+		}{
+			{`SELECT count(*) FROM book_search JOIN books b ON b.id=book_search.rowid WHERE book_search MATCH ? AND b.deleted=0 AND ` + filter, titleQ, &st.BookTitles},
+			{`SELECT count(*) FROM authors_search WHERE authors_search MATCH ? AND EXISTS (SELECT 1 FROM book_authors ba JOIN books b ON b.id=ba.book_id WHERE ba.author_id=authors_search.rowid AND b.deleted=0 AND ` + filter + `)`, plainQ, &st.Authors},
+			{`SELECT count(*) FROM series_search WHERE series_search MATCH ? AND EXISTS (SELECT 1 FROM books b WHERE b.series_id=series_search.rowid AND b.deleted=0 AND ` + filter + `)`, plainQ, &st.BookSeries},
+		}
+		for _, q := range queries {
+			if err := s.db.QueryRowContext(ctx, q.sql, q.query).Scan(q.count); err != nil {
+				return st, err
+			}
+		}
 		return st, nil
 	}
 	if err := s.db.QueryRowContext(ctx,
@@ -174,12 +192,12 @@ func (s *Store) SearchStats(ctx context.Context, query string) (SearchStats, err
 	return st, nil
 }
 
-func (s *Store) SearchTitles(ctx context.Context, query string, limit int) ([]Book, error) {
+func (s *Store) SearchTitles(ctx context.Context, query string, limit int, language ...string) ([]Book, error) {
 	q := ftsQuery(query, "title")
 	if q == "" {
 		return nil, nil
 	}
-	return s.rankedSearch(ctx, q, limit, 0)
+	return s.rankedSearch(ctx, q, limit, 0, language...)
 }
 
 // rankedSearch returns FTS matches ordered by relevance (bm25), with the
@@ -187,7 +205,24 @@ func (s *Store) SearchTitles(ctx context.Context, query string, limit int) ([]Bo
 // higher rating come first. When the query matches a huge share of the
 // library, ranking hundreds of thousands of rows costs more than it is
 // worth: the guard keeps the old take-first behavior, sorted by rating.
-func (s *Store) rankedSearch(ctx context.Context, ftsQ string, limit, offset int) ([]Book, error) {
+func (s *Store) rankedSearch(ctx context.Context, ftsQ string, limit, offset int, language ...string) ([]Book, error) {
+	if filter := searchLanguageFilter(language); filter != "1" {
+		// Keep the existing broad-query guard, with language and live-book
+		// eligibility applied before ranking and pagination.
+		var matches int
+		if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM book_search JOIN books b ON b.id=book_search.rowid WHERE book_search MATCH ? AND b.deleted=0 AND `+filter, ftsQ).Scan(&matches); err != nil {
+			return nil, err
+		}
+		order := "book_search.rank, b.lib_rate DESC, b.id"
+		if matches > 5000 {
+			order = "b.lib_rate DESC, b.title, b.id"
+		}
+		return s.scanBooks(ctx, `SELECT`+bookColumns+`
+   FROM book_search JOIN books b ON b.id=book_search.rowid
+   LEFT JOIN series s ON s.id=b.series_id
+   WHERE book_search MATCH ? AND b.deleted=0 AND `+filter+`
+   ORDER BY `+order+` LIMIT ? OFFSET ?`, ftsQ, limit, offset)
+	}
 	var matches int
 	if err := s.db.QueryRowContext(ctx,
 		`SELECT count(*) FROM book_search WHERE book_search MATCH ?`, ftsQ).Scan(&matches); err != nil {
@@ -209,18 +244,23 @@ func (s *Store) rankedSearch(ctx context.Context, ftsQ string, limit, offset int
 		ORDER BY m.rank, b.lib_rate DESC, b.id`, ftsQ, limit, offset)
 }
 
-func (s *Store) SearchAuthors(ctx context.Context, query string, limit int) ([]AuthorEntry, error) {
+func (s *Store) SearchAuthors(ctx context.Context, query string, limit int, language ...string) ([]AuthorEntry, error) {
 	q := ftsQuery(query, "")
 	if q == "" {
 		return nil, nil
+	}
+	filter := searchLanguageFilter(language)
+	eligibility := ""
+	if filter != "1" {
+		eligibility = ` AND EXISTS (SELECT 1 FROM book_authors ba JOIN books b ON b.id=ba.book_id WHERE ba.author_id=a.id AND b.deleted=0 AND ` + filter + `)`
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT a.id,
 		       trim(a.last_name || ' ' || a.first_name || ' ' || a.middle_name),
 		       (SELECT count(*) FROM book_authors ba JOIN books b ON b.id = ba.book_id
-		        WHERE ba.author_id = a.id AND b.deleted = 0)
+		        WHERE ba.author_id = a.id AND b.deleted = 0 AND `+filter+`)
 		FROM authors a
-		WHERE a.id IN (SELECT rowid FROM authors_search WHERE authors_search MATCH ?)
+		WHERE a.id IN (SELECT rowid FROM authors_search WHERE authors_search MATCH ?)`+eligibility+`
 		ORDER BY a.last_name, a.first_name
 		LIMIT ?`, q, limit)
 	if err != nil {
@@ -239,16 +279,21 @@ func (s *Store) SearchAuthors(ctx context.Context, query string, limit int) ([]A
 	return out, rows.Err()
 }
 
-func (s *Store) SearchSeries(ctx context.Context, query string, limit int) ([]SeriesEntry, error) {
+func (s *Store) SearchSeries(ctx context.Context, query string, limit int, language ...string) ([]SeriesEntry, error) {
 	q := ftsQuery(query, "")
 	if q == "" {
 		return nil, nil
 	}
+	filter := searchLanguageFilter(language)
+	eligibility := ""
+	if filter != "1" {
+		eligibility = ` AND EXISTS (SELECT 1 FROM books b WHERE b.series_id=s.id AND b.deleted=0 AND ` + filter + `)`
+	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT s.id, s.title,
-		       (SELECT count(*) FROM books b WHERE b.series_id = s.id AND b.deleted = 0)
+		       (SELECT count(*) FROM books b WHERE b.series_id = s.id AND b.deleted = 0 AND `+filter+`)
 		FROM series s
-		WHERE s.id IN (SELECT rowid FROM series_search WHERE series_search MATCH ?)
+		WHERE s.id IN (SELECT rowid FROM series_search WHERE series_search MATCH ?)`+eligibility+`
 		ORDER BY s.title
 		LIMIT ?`, q, limit)
 	if err != nil {
@@ -267,7 +312,7 @@ func (s *Store) SearchSeries(ctx context.Context, query string, limit int) ([]Se
 	return out, rows.Err()
 }
 
-func (s *Store) AuthorBooks(ctx context.Context, authorID int64) ([]Book, string, error) {
+func (s *Store) AuthorBooks(ctx context.Context, authorID int64, language ...string) ([]Book, string, error) {
 	var name string
 	err := s.db.QueryRowContext(ctx,
 		`SELECT trim(last_name || ' ' || first_name || ' ' || middle_name) FROM authors WHERE id = ?`,
@@ -279,12 +324,12 @@ func (s *Store) AuthorBooks(ctx context.Context, authorID int64) ([]Book, string
 		return nil, "", err
 	}
 	books, err := s.queryBooks(ctx,
-		`b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?)`,
+		`b.id IN (SELECT book_id FROM book_authors WHERE author_id = ?) AND `+searchLanguageFilter(language),
 		`coalesce(s.title, ''), b.series_num, b.title`, 0, 0, authorID)
 	return books, name, err
 }
 
-func (s *Store) SeriesBooks(ctx context.Context, seriesID int64) ([]Book, string, error) {
+func (s *Store) SeriesBooks(ctx context.Context, seriesID int64, language ...string) ([]Book, string, error) {
 	var title string
 	err := s.db.QueryRowContext(ctx, `SELECT title FROM series WHERE id = ?`, seriesID).Scan(&title)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -293,7 +338,7 @@ func (s *Store) SeriesBooks(ctx context.Context, seriesID int64) ([]Book, string
 	if err != nil {
 		return nil, "", err
 	}
-	books, err := s.queryBooks(ctx, `b.series_id = ?`, `b.series_num, b.title`, 0, 0, seriesID)
+	books, err := s.queryBooks(ctx, `b.series_id = ? AND `+searchLanguageFilter(language), `b.series_num, b.title`, 0, 0, seriesID)
 	return books, title, err
 }
 
@@ -445,12 +490,12 @@ func (s *Store) GenresWithCounts(ctx context.Context) ([]GenreCount, error) {
 
 // SearchBooks searches across all fields (title, authors, series)
 // with pagination, for the OPDS catalog.
-func (s *Store) SearchBooks(ctx context.Context, query string, limit, offset int) ([]Book, error) {
+func (s *Store) SearchBooks(ctx context.Context, query string, limit, offset int, language ...string) ([]Book, error) {
 	q := ftsQuery(query, "")
 	if q == "" {
 		return nil, nil
 	}
-	return s.rankedSearch(ctx, q, limit, offset)
+	return s.rankedSearch(ctx, q, limit, offset, language...)
 }
 
 // --- Book card and book file ---
@@ -538,10 +583,15 @@ func (s *Store) SampleFolders(ctx context.Context, limit int) ([]string, error) 
 func (s *Store) BookFile(ctx context.Context, bookID int64) (*BookFile, error) {
 	f := &BookFile{}
 	err := s.db.QueryRowContext(ctx, `
-		SELECT b.id, b.title, fo.name, b.file, b.ext, b.size
+		SELECT b.id, b.title, fo.name, b.file, b.ext, b.size, b.lib_id,
+          coalesce((SELECT group_concat(name, ', ') FROM (
+            SELECT trim(a.last_name || ' ' || a.first_name || ' ' || a.middle_name) AS name
+            FROM book_authors ba JOIN authors a ON a.id=ba.author_id
+            WHERE ba.book_id=b.id ORDER BY a.last_name, a.first_name, a.middle_name, a.id
+          )), '')
 		FROM books b JOIN folders fo ON fo.id = b.folder_id
 		WHERE b.id = ? AND b.deleted = 0`, bookID).
-		Scan(&f.ID, &f.Title, &f.Folder, &f.File, &f.Ext, &f.Size)
+		Scan(&f.ID, &f.Title, &f.Folder, &f.File, &f.Ext, &f.Size, &f.LibID, &f.AuthorNames)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}

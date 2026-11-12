@@ -1,15 +1,21 @@
 .kosync__overlay {
-  position: fixed;
-  inset: 0;
+  /* Anchor to the sticky header, whose backdrop-filter also establishes
+     a containing block. The popup has breathing room below its bottom edge. */
+  position: absolute;
+  inset: 100% 0 auto;
+  height: calc(100dvh - 100%);
   z-index: 60;
   background: rgba(0, 0, 0, 0.45);
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
-  padding: 16px;
+  padding: 16px 16px 24px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .kosync__card {
+  flex-shrink: 0;
   background: var(--bg);
   color: var(--fg);
   border: 1px solid var(--border, rgba(0, 0, 0, 0.15));

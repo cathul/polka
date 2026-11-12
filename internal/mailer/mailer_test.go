@@ -2,7 +2,11 @@ package mailer
 
 import (
 	"bufio"
+	"io"
+	"mime"
+	"mime/multipart"
 	"net"
+	"net/mail"
 	"strings"
 	"testing"
 	"time"
@@ -78,8 +82,33 @@ func TestSendWithAttachment(t *testing.T) {
 	}
 	select {
 	case msg := <-got:
+		message, err := mail.ReadMessage(strings.NewReader(msg))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, params, err := mime.ParseMediaType(message.Header.Get("Content-Type"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		reader := multipart.NewReader(message.Body, params["boundary"])
+		found := false
+		for {
+			part, err := reader.NextPart()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if part.FileName() == "voyna.fb2" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatal("attachment filename did not survive MIME encoding")
+		}
 		for _, want := range []string{"To: kindle@example.com", "multipart/mixed",
-			`filename="voyna.fb2"`, "base64", "Qk9PS0RBVEE="} { // base64("BOOKDATA")
+			"base64", "Qk9PS0RBVEE="} { // base64("BOOKDATA")
 			if !strings.Contains(msg, want) {
 				t.Errorf("message missing %q", want)
 			}
@@ -96,4 +125,31 @@ func splitHostPort(addr string) (string, int) {
 		port = port*10 + int(c-'0')
 	}
 	return h, port
+}
+
+func TestUnicodeAttachmentName(t *testing.T) {
+	cfg := Config{From: "sender@example.org"}
+	raw := cfg.build("recipient@example.org", "Книга", "Body", "Война и мир.epub", []byte("data"))
+	message, err := mail.ReadMessage(strings.NewReader(string(raw)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, params, err := mime.ParseMediaType(message.Header.Get("Content-Type"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := multipart.NewReader(message.Body, params["boundary"])
+	for {
+		part, err := parts.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if part.FileName() == "Война и мир.epub" {
+			return
+		}
+	}
+	t.Fatal("Unicode EPUB filename missing")
 }

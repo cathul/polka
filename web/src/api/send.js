@@ -19,4 +19,4 @@ const req = async (path, method = "GET", body) => {
 
 export const fetchReaderEmail = () => req("api/v1/me/reader-email");
 export const setReaderEmail = (email) => req("api/v1/me/reader-email", "POST", { email });
-export const sendBook = (bookId) => req(`api/v1/books/${bookId}/send`, "POST");
+export const sendBook = (bookId, format = "original") => req(`api/v1/books/${bookId}/send`, "POST", { format });

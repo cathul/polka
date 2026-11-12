@@ -8,6 +8,7 @@ import (
 // timestamped snapshots, last-write-wins merge.
 
 type ProgressState struct {
+	Deleted   bool    `json:"deleted,omitempty"`
 	BookID    int64   `json:"bookId"`
 	Chapter   int     `json:"chapter"`
 	Position  float64 `json:"position"`
@@ -44,14 +45,16 @@ func (s *Service) ExportState(ctx context.Context, userID int64) (*SyncState, er
 	state := &SyncState{}
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT book_id, chapter, position, overall, locator, updated_at
-		FROM reading_progress WHERE user_id = ?`, userID)
+		SELECT book_id, chapter, position, overall, locator, updated_at, 0
+ FROM reading_progress WHERE user_id = ?
+ UNION ALL
+ SELECT book_id,0,0,0,'',updated_at,1 FROM reading_progress_deleted WHERE user_id=?`, userID, userID)
 	if err != nil {
 		return nil, err
 	}
 	for rows.Next() {
 		var p ProgressState
-		if err := rows.Scan(&p.BookID, &p.Chapter, &p.Position, &p.Overall, &p.Locator, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.BookID, &p.Chapter, &p.Position, &p.Overall, &p.Locator, &p.UpdatedAt, &p.Deleted); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -112,15 +115,7 @@ func (s *Service) ExportState(ctx context.Context, userID int64) (*SyncState, er
 // by updated_at, lists — union (create missing ones, add books).
 func (s *Service) MergeState(ctx context.Context, userID int64, in *SyncState) error {
 	for _, p := range in.Progress {
-		if _, err := s.db.ExecContext(ctx, `
-			INSERT INTO reading_progress (user_id, book_id, chapter, position, overall, locator, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT (user_id, book_id) DO UPDATE SET
-				chapter = excluded.chapter, position = excluded.position,
-				overall = excluded.overall, locator = excluded.locator,
-				updated_at = excluded.updated_at
-			WHERE excluded.updated_at > reading_progress.updated_at`,
-			userID, p.BookID, p.Chapter, p.Position, p.Overall, p.Locator, p.UpdatedAt); err != nil {
+		if err := s.mergeProgress(ctx, userID, p); err != nil {
 			return err
 		}
 	}

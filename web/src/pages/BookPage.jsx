@@ -1,5 +1,5 @@
 import { t } from "../i18n";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import api from "../api/api";
 import RatingStars from "../components/RatingStars";
@@ -12,6 +12,7 @@ import { rateBook } from "../api/ratings";
 import { toggleWishlist } from "../api/lists";
 import { fetchReaderEmail, setReaderEmail, sendBook } from "../api/send";
 import ListsMenu from "../components/ListsMenu";
+import RemoveProgressButton from "../components/RemoveProgressButton";
 import "./BookPage.css";
 
 const formatBytes = (bytes) => {
@@ -64,13 +65,22 @@ const BookPage = ({ user, sync }) => {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+
+  // HashRouter keeps the previous screen's scroll position. Reset both on
+  // book navigation and when the loading placeholder becomes the real page.
+  useLayoutEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+  }, [bookId, loading]);
+
   const [coverFailed, setCoverFailed] = useState(false);
   const [enrichment, setEnrichment] = useState(null);
   const [enrichmentLoading, setEnrichmentLoading] = useState(false);
   const [similar, setSimilar] = useState(null); // {similar: [], external: []}
   const [readProgress, setReadProgress] = useState(0);
+  const [hasReadProgress, setHasReadProgress] = useState(false);
+  const [conversionEnabled, setConversionEnabled] = useState(false);
+  const [sendFormat, setSendFormat] = useState("original");
   const [smtpReady, setSmtpReady] = useState(false);
-  const [readerEmail, setReaderEmailState] = useState("");
   const [sendState, setSendState] = useState("idle");
   const [polkaRating, setPolkaRating] = useState(null); // {rating, count}
   const [userRating, setUserRating] = useState(0);
@@ -97,34 +107,24 @@ const BookPage = ({ user, sync }) => {
       .finally(() => setWishBusy(false));
   };
 
-  const sendToReader = () => {
+  const sendToReader = async () => {
     if (sendState === "sending") return;
-    let email = readerEmail;
-    if (!email) {
-      email = (window.prompt(t("book.send.askEmail")) || "").trim();
-      if (!email) return;
-    }
     setSendState("sending");
-    const go = () =>
-      sendBook(bookId)
-        .then(() => {
-          setSendState("sent");
-          setTimeout(() => setSendState("idle"), 2500);
-        })
-        .catch(() => {
-          setSendState("idle");
-          alert(t("book.send.fail"));
-        });
-    if (email !== readerEmail) {
-      setReaderEmail(email)
-        .then(() => setReaderEmailState(email))
-        .then(go)
-        .catch(() => {
-          setSendState("idle");
-          alert(t("book.send.fail"));
-        });
-    } else {
-      go();
+    try {
+      // Read the same server setting as the header dialog at send time:
+      // it may have changed since this book page was opened.
+      const settings = await fetchReaderEmail();
+      if (!settings.email) {
+        const email = (window.prompt(t("book.send.askEmail")) || "").trim();
+        if (!email) { setSendState("idle"); return; }
+        await setReaderEmail(email);
+      }
+      await sendBook(bookId, sendFormat);
+      setSendState("sent");
+      setTimeout(() => setSendState("idle"), 2500);
+    } catch (error) {
+      setSendState("idle");
+      alert(error.message || t("book.send.fail"));
     }
   };
 
@@ -143,15 +143,22 @@ const BookPage = ({ user, sync }) => {
   useEffect(() => {
     let cancelled = false;
     setReadProgress(0);
+    setHasReadProgress(false);
+    setSendFormat("original");
+    setConversionEnabled(false);
     setListIds([]);
     fetchProgress(bookId)
-      .then((p) => !cancelled && p?.stored && setReadProgress(Number(p.progress ?? 0)))
+      .then((progress) => {
+        if (cancelled || !progress?.stored) return;
+        setReadProgress(Number(progress.progress ?? 0));
+        setHasReadProgress(progress.exists ?? Number(progress.progress) > 0);
+      })
       .catch(() => {});
     fetchReaderEmail()
       .then((res) => {
         if (cancelled) return;
         setSmtpReady(Boolean(res?.smtpReady));
-        setReaderEmailState(res?.email ?? "");
+        setConversionEnabled(Boolean(res?.conversionEnabled));
       })
       .catch(() => {});
     import("../api/lists").then(({ fetchLists }) =>
@@ -272,6 +279,8 @@ const BookPage = ({ user, sync }) => {
   const { bookForm, annotation, publisher, city, year, isbn } = data;
   const { BookID, Title, LibRate, BookSize, Genres, Ext, FileName } = bookForm;
 
+  const progressPercent = Number.isFinite(readProgress) ? Math.round(Math.max(0, Math.min(1, readProgress)) * 100) : 0;
+
   const initials = (Title || "").trim().slice(0, 2).toUpperCase();
 
   const SOURCE_LABELS = {
@@ -310,14 +319,7 @@ const BookPage = ({ user, sync }) => {
               onError={() => setCoverFailed(true)}
             />
           )}
-          {readProgress > 0 && (
-            <div className="book-page__progress" title={`${Math.round(readProgress * 100)}%`}>
-              <div
-                className="book-page__progress-fill"
-                style={{ width: `${Math.max(2, Math.round(readProgress * 100))}%` }}
-              />
-            </div>
-          )}
+
         </aside>
 
         <section className="book-page__info">
@@ -425,64 +427,69 @@ const BookPage = ({ user, sync }) => {
             )
           )}
 
-          <div className="book-page__actions">
-            {[".fb2", ".txt", ".pdf", ".epub"].includes(Ext) && (
-              <Link className="btn btn-primary" to={`/read/${BookID}`}>
-                {readProgress > 0
-                  ? t("book.continue", { p: Math.round(readProgress * 100) })
-                  : t("book.read")}
+          {[".fb2", ".txt", ".pdf", ".epub"].includes(Ext) && (
+            <div className="book-page__reading">
+              <Link className="book-page__read-link" to={`/read/${BookID}`}
+                aria-label={hasReadProgress ? t("book.continue", { p: progressPercent }) : t("book.read")}>
+                {hasReadProgress && <span className="book-page__read-fill" aria-hidden="true" style={{ width: `${progressPercent}%` }} />}
+                <span className="book-page__read-label">{hasReadProgress ? t("book.resume") : t("book.read")}</span>
+                {hasReadProgress && (
+                  <span className="book-page__read-percent" role="progressbar" aria-label={t("book.resume")}
+                    aria-valuemin={0} aria-valuemax={100} aria-valuenow={progressPercent}>{progressPercent}%</span>
+                )}
+                <span className="book-page__read-arrow" aria-hidden="true">›</span>
               </Link>
-            )}
-            <a className={`btn ${Ext === ".fb2" || Ext === ".pdf" ? "btn-ghost" : "btn-primary"}`} href={api.fb2Url(BookID)}>
-              {t("book.download", { ext: Ext || ".fb2" })}
-            </a>
-            {smtpReady && (
-              <button
-                type="button"
-                className="btn btn-ghost"
-                onClick={sendToReader}
-                disabled={sendState === "sending"}
-                title={t("book.send.hint")}
-              >
-                {sendState === "sent"
-                  ? t("book.send.done")
-                  : sendState === "sending"
-                    ? t("book.send.sending")
-                    : t("book.send")}
+            </div>
+          )}
+
+          <div className="book-page__controls">
+            <div className="book-page__actions">
+              {smtpReady && (
+                <div className="book-page__send">
+                  <button type="button" className="btn btn-ghost" onClick={sendToReader}
+                    disabled={sendState === "sending"} title={t("book.send.hint")}>
+                    {sendState === "sent" ? t("book.send.done")
+                      : sendState === "sending" ? t("book.send.sending") : t("book.send")}
+                  </button>
+                  {conversionEnabled && Ext === ".fb2" && (
+                    <select aria-label={t("book.send.format")} title={t("book.send.format")} value={sendFormat}
+                      disabled={sendState === "sending"} onChange={(event) => setSendFormat(event.target.value)}>
+                      <option value="original">FB2</option>
+                      <option value="epub3">EPUB3</option>
+                    </select>
+                  )}
+                </div>
+              )}
+              <button type="button" className={`btn btn-ghost book-page__wish ${inWishlist ? "is-on" : ""}`}
+                onClick={flipWishlist} disabled={wishBusy} title={inWishlist ? t("book.wish.remove") : t("book.wish.add")}>
+                {inWishlist ? t("book.wished") : t("book.wish")}
               </button>
-            )}
-            <button
-              type="button"
-              className={`btn btn-ghost book-page__wish ${inWishlist ? "is-on" : ""}`}
-              onClick={flipWishlist}
-              disabled={wishBusy}
-              title={inWishlist ? t("book.wish.remove") : t("book.wish.add")}
-            >
-              {inWishlist ? t("book.wished") : t("book.wish")}
-            </button>
-            {sync && (
-              <button
-                type="button"
-                className={`btn btn-ghost book-page__wish ${isOffline ? "is-on" : ""}`}
-                onClick={toggleOffline}
-                disabled={offlineBusy}
-                title={isOffline ? t("book.offline.remove") : t("book.offline.add")}
-              >
-                {offlineBusy ? "…" : isOffline ? t("book.offline.on") : t("book.offline")}
-              </button>
-            )}
-            <ListsMenu bookId={Number(bookId)} memberIds={listIds} onChange={onListChange} />
-            <a className="btn btn-ghost" href={api.zipUrl(BookID)}>
-              {t("book.downloadZip")}
-            </a>
-            <a className="btn btn-ghost" href={api.fb2CompactUrl(BookID)}>
-              {t("book.downloadCompact", { ext: Ext || ".fb2" })}
-            </a>
-            {user?.role === "admin" && (
-              <button type="button" className="btn btn-ghost book-page__delete" onClick={removeBook}>
-                {t("book.delete")}
-              </button>
-            )}
+              <ListsMenu bookId={Number(bookId)} memberIds={listIds} onChange={onListChange} />
+              {hasReadProgress && user && (
+                <RemoveProgressButton bookId={bookId} onRemoved={() => {
+                  setReadProgress(0);
+                  setHasReadProgress(false);
+                }} />
+              )}
+              {user?.role === "admin" && (
+                <button type="button" className="btn btn-ghost book-page__delete" onClick={removeBook}>
+                  {t("book.delete")}
+                </button>
+              )}
+            </div>
+            <div className="book-page__downloads">
+              <a className="btn btn-ghost" href={api.fb2Url(BookID)}>{t("book.download", { ext: Ext || ".fb2" })}</a>
+              <a className="btn btn-ghost" href={api.zipUrl(BookID)}>{t("book.downloadZip")}</a>
+              {Ext === ".fb2" && (
+                <a className="btn btn-ghost" href={api.fb2CompactUrl(BookID)}>{t("book.downloadCompact", { ext: ".fb2" })}</a>
+              )}
+              {sync && (
+                <button type="button" className={`btn btn-ghost book-page__wish ${isOffline ? "is-on" : ""}`}
+                  onClick={toggleOffline} disabled={offlineBusy} title={isOffline ? t("book.offline.remove") : t("book.offline.add")}>
+                  {offlineBusy ? "…" : isOffline ? t("book.offline.on") : t("book.offline")}
+                </button>
+              )}
+            </div>
           </div>
 
           {annotation && (

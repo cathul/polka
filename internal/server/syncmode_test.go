@@ -433,3 +433,35 @@ func TestDesktopSyncConfig(t *testing.T) {
 		t.Errorf("/admin/users in desktop mode must not be an API route, got %q", hdr.Get("Content-Type"))
 	}
 }
+
+func TestSyncModeProgressDeletionAndNewRead(t *testing.T) {
+	up := newUpstream(t)
+	client, _, _ := newDesktopClient(t, up)
+	path := client.URL + "/api/v1/read/" + itoa64(up.bookID) + "/progress"
+	syncNow := func() {
+		t.Helper()
+		if code, data, _ := statusOf(t, "POST", client.URL+"/api/v1/sync/now", ""); code != 200 {
+			t.Fatalf("sync: %d %s", code, data)
+		}
+	}
+	if err := up.users.SaveOverall(context.Background(), up.owner.ID, up.bookID, 0.2); err != nil {
+		t.Fatal(err)
+	}
+	syncNow()
+	up.down.Store(true) // Deletion must also survive a temporary offline period.
+	if code, data, _ := statusOf(t, "DELETE", path, ""); code != 200 {
+		t.Fatalf("delete in connected mode: %d %s", code, data)
+	}
+	up.down.Store(false)
+	syncNow()
+	if _, err := up.users.GetProgress(context.Background(), up.owner.ID, up.bookID); err != auth.ErrNotFound {
+		t.Fatalf("deletion not synchronized: %v", err)
+	}
+	if code, data, _ := statusOf(t, "POST", path, `{"chapter":1,"position":0.1,"progress":0.4}`); code != 200 {
+		t.Fatalf("new read: %d %s", code, data)
+	}
+	syncNow()
+	if p, err := up.users.GetProgress(context.Background(), up.owner.ID, up.bookID); err != nil || p.Overall != 0.4 {
+		t.Fatalf("new reading blocked: %+v %v", p, err)
+	}
+}

@@ -11,6 +11,9 @@ import {
   saveReaderPrefs,
 } from "../api/reader";
 import "./ReaderPage.css";
+import { restoreChapterPosition } from "./readerPosition";
+import { useReadingActivity } from "./useReadingActivity";
+import { captureFB2Position, restoreFB2Position, readingFraction } from "./fb2Position";
 
 // PDF and EPUB engines are heavy — load them only when such a file is opened.
 const PdfReader = lazy(() => import("./PdfReader"));
@@ -38,6 +41,7 @@ const chapterLabel = (meta, index) =>
 
 const ReaderPage = () => {
   const { bookId } = useParams();
+  const readingActivity = useReadingActivity(bookId);
 
   const [meta, setMeta] = useState(null);
   const [loaded, setLoaded] = useState([]); // loaded chapters, in order
@@ -77,12 +81,20 @@ const ReaderPage = () => {
     };
   }, []);
 
-  const totalRef = useRef(0);
+  const bookRef = useRef(bookId);
+  bookRef.current = bookId;
+  const metaRef = useRef(meta);
+  metaRef.current = meta;
+  const currentRef = useRef(current);
+  currentRef.current = current;
   const persist = useCallback(
     (index, ratio) => {
-      const overall = totalRef.current > 0 ? Math.min(1, (index + ratio) / totalRef.current) : 0;
+      if (!readingActivity.current) return;
+      const exact = captureFB2Position(pageRef.current, index, metaRef.current);
+      const overall = exact?.progress ?? readingFraction(metaRef.current, index, ratio);
+      if (exact) setCurrent((previous) => previous.index === index ? { ...previous, overall } : previous);
       if (serverStored.current) {
-        saveProgress(bookId, index, ratio, overall);
+        saveProgress(bookId, index, ratio, overall, exact?.locator ?? "web:chapters");
       } else {
         localProgress.set(bookId, index, ratio);
       }
@@ -93,7 +105,10 @@ const ReaderPage = () => {
   // --- Startup: metadata + saved position ---
   useEffect(() => {
     let cancelled = false;
-    Promise.all([fetchReadMeta(bookId), fetchProgress(bookId).catch(() => null)])
+    clearTimeout(saveTimer.current);
+    restoreTo.current = null;
+    setLoaded([]);
+    Promise.all([fetchReadMeta(bookId), fetchProgress(bookId, true).catch(() => null)])
       .then(([m, prog]) => {
         if (cancelled) return;
         if (m.format === "pdf") {
@@ -102,14 +117,14 @@ const ReaderPage = () => {
         }
         serverStored.current = Boolean(prog?.stored);
         const saved = prog?.stored ? prog : localProgress.get(bookId);
-        const index = Math.max(0, Math.min(Number(saved?.chapter ?? 0), m.chapters.length - 1));
-        restoreTo.current = { index, ratio: Number(saved?.position ?? 0) };
-        totalRef.current = m.chapters.length;
+        const position = restoreChapterPosition(saved, m.chapters.length);
+        const { index } = position;
+        restoreTo.current = { ...position, anchor: prog?.anchor };
         setMeta(m);
         return fetchChapter(bookId, index).then((ch) => {
           if (!cancelled) {
             setLoaded([ch]);
-            setCurrent({ index, ratio: restoreTo.current.ratio });
+            setCurrent({ ...position, overall: prog?.progress });
           }
         });
       })
@@ -122,13 +137,31 @@ const ReaderPage = () => {
   // --- Jump to the saved position after the chapter renders ---
   useEffect(() => {
     if (!restoreTo.current || loaded.length === 0) return;
-    const { index, ratio } = restoreTo.current;
+    const { index, ratio, anchor } = restoreTo.current;
     restoreTo.current = null;
-    requestAnimationFrame(() => {
+    const restore = () => {
+      if (bookRef.current !== bookId) return;
       const el = pageRef.current?.querySelector(`[data-chapter="${index}"]`);
       if (!el) return;
-      window.scrollTo(0, ratio > 0 ? el.offsetTop + ratio * el.offsetHeight - 80 : 0);
+      if (!restoreFB2Position(pageRef.current, anchor)) {
+        window.scrollTo({ top: Math.max(0, el.offsetTop + ratio * el.offsetHeight - window.innerHeight * 0.35), left: 0, behavior: "instant" });
+      }
+    };
+    requestAnimationFrame(() => {
+      restore();
+      if (bookRef.current === bookId && readingActivity.current) persist(index, ratio);
     });
+    if (anchor) {
+      // Fonts/images may finish after the first layout. Keep the same text
+      // anchor until the reader takes control; never move it during reading.
+      const lateRestore = () => {
+        if (!readingActivity.current) restore();
+      };
+      pageRef.current?.querySelectorAll("img").forEach((image) => {
+        if (!image.complete) image.addEventListener("load", lateRestore, { once: true });
+      });
+      document.fonts?.ready.then(lateRestore).catch(() => {});
+    }
   }, [loaded]);
 
   // --- Auto-load the next chapter ---
@@ -163,6 +196,7 @@ const ReaderPage = () => {
     const onScroll = () => {
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(() => {
+        if (!readingActivity.current || restoreTo.current) return;
         const anchor = window.scrollY + window.innerHeight * 0.35;
         const wrappers = pageRef.current?.querySelectorAll("[data-chapter]") ?? [];
         let found = null;
@@ -172,6 +206,7 @@ const ReaderPage = () => {
         if (!found) return;
         const index = Number(found.dataset.chapter);
         const ratio = Math.max(0, Math.min(1, (anchor - found.offsetTop) / Math.max(1, found.offsetHeight)));
+        currentRef.current = { index, ratio };
         setCurrent((prev) => (prev.index !== index || Math.abs(prev.ratio - ratio) > 0.005 ? { index, ratio } : prev));
         clearTimeout(saveTimer.current);
         saveTimer.current = setTimeout(() => persist(index, ratio), 1200);
@@ -179,7 +214,7 @@ const ReaderPage = () => {
     };
     onScroll();
     window.addEventListener("scroll", onScroll, { passive: true });
-    const flush = () => document.visibilityState === "hidden" && persist(current.index, current.ratio);
+    const flush = () => document.visibilityState === "hidden" && persist(currentRef.current.index, currentRef.current.ratio);
     document.addEventListener("visibilitychange", flush);
     return () => {
       window.removeEventListener("scroll", onScroll);
@@ -194,6 +229,7 @@ const ReaderPage = () => {
   const goTo = useCallback(
     (n) => {
       if (!meta || n < 0 || n >= total) return;
+      readingActivity.current = true;
       setTocOpen(false);
       setNote(null);
       const already = pageRef.current?.querySelector(`[data-chapter="${n}"]`);
@@ -206,7 +242,6 @@ const ReaderPage = () => {
           restoreTo.current = { index: n, ratio: 0 };
           setLoaded([ch]);
           setCurrent({ index: n, ratio: 0 });
-          persist(n, 0);
         })
         .catch(() => {});
     },
@@ -302,7 +337,7 @@ const ReaderPage = () => {
     );
   }
 
-  const overall = total > 0 ? (current.index + current.ratio) / total : 0;
+  const overall = current.overall ?? readingFraction(meta, current.index, current.ratio);
   const lastLoaded = loaded.length ? loaded[loaded.length - 1].index : -1;
   const firstLoaded = loaded.length ? loaded[0].index : 0;
 

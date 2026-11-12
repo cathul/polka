@@ -9,3 +9,14 @@ android/app/build/
 android/.gradle/
 android/app/libs/*.aar
 android/app/libs/*.jar
+
+.tools/
+
+.local-server/
+
+# Private server copies and credentials
+polka_old/
+polka.zip
+.env
+.env.*
+!.env.example

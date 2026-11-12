@@ -25,7 +25,7 @@ import (
 	"github.com/vestigiumincaligne/polka/web"
 )
 
-var version = "dev" // overridden at build time via -ldflags
+var version = "0.1" // overridden at build time via -ldflags
 
 const usage = `polka — сервер домашней библиотеки
 
@@ -213,10 +213,8 @@ func runImport(log *slog.Logger, args []string) error {
 		return errors.New("укажите inpx-файл: polka import --inpx <файл.inpx>")
 	}
 
-	if replace {
-		for _, suffix := range []string{"", "-wal", "-shm"} {
-			os.Remove(cfg.DBPath() + suffix)
-		}
+	if err := importer.ValidateInpx(inpxPath); err != nil {
+		return err
 	}
 
 	st, err := store.Open(cfg.DBPath())
@@ -225,8 +223,16 @@ func runImport(log *slog.Logger, args []string) error {
 	}
 	defer st.Close()
 
+	if replace {
+		if err := st.Clear(context.Background()); err != nil {
+			return fmt.Errorf("clear catalog: %w", err)
+		}
+	}
 	stats, err := importer.ImportInpx(context.Background(), log, st, inpxPath, nil)
 	if err != nil {
+		return err
+	}
+	if err := st.SetMeta(context.Background(), "last_inpx_path", inpxPath); err != nil {
 		return err
 	}
 	log.Info("import done",

@@ -41,8 +41,8 @@ func (s *Store) migrate() error {
 	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		return err
 	}
-	if version >= schemaVersion {
-		return nil
+	if version > schemaVersion {
+		return fmt.Errorf("catalog schema %d is newer than supported version %d", version, schemaVersion)
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -77,8 +77,13 @@ func (s *Store) migrate() error {
 			return err
 		}
 	}
-	if _, err := tx.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, schemaVersion)); err != nil {
+	if err := migrateCustom(tx); err != nil {
 		return err
+	}
+	if version < schemaVersion {
+		if _, err := tx.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, schemaVersion)); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
@@ -87,6 +92,13 @@ func (s *Store) BookCount(ctx context.Context) (int, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM books WHERE deleted = 0`).Scan(&n)
 	return n, err
+}
+
+// CatalogCount includes hidden/deleted records, which still require replace.
+func (s *Store) CatalogCount(ctx context.Context) (int, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM books`).Scan(&count)
+	return count, err
 }
 
 func (s *Store) GetMeta(ctx context.Context, key, def string) string {

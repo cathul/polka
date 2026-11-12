@@ -12,6 +12,7 @@ import (
 	"regexp"
 
 	"github.com/vestigiumincaligne/polka/internal/auth"
+	"github.com/vestigiumincaligne/polka/internal/store"
 )
 
 // KOReader progress sync (the kosync protocol, as implemented by
@@ -155,7 +156,7 @@ func (s *Server) handleKosyncUpdate(w http.ResponseWriter, r *http.Request) {
 	// was downloaded through Polka), the overall progress follows the device.
 	if bookID, err := s.st.BookIDByDigest(r.Context(), req.Document); err == nil {
 		if p := *req.Percentage; p >= 0 && p <= 1 {
-			if err := s.users.SaveOverall(r.Context(), u.ID, bookID, p); err != nil {
+			if err := s.users.SaveDeviceOverall(r.Context(), u.ID, bookID, p, deviceLocator(req.Document, progress)); err != nil {
 				s.log.Warn("kosync bridge", "error", err)
 			}
 		}
@@ -301,12 +302,12 @@ func (d *digestTee) digest() string {
 }
 
 // recordDigest computes the digest of a fully served file and remembers it.
-func (s *Server) recordDigest(tee *digestTee, bookID, want, copied int64) {
+func (s *Server) recordDigest(tee *digestTee, file *store.BookFile, want, copied int64) {
 	if copied != want || copied == 0 {
 		return // the client aborted mid-download: the digest would be wrong
 	}
-	if err := s.st.SetBookDigest(context.Background(), tee.digest(), bookID); err != nil {
-		s.log.Warn("book digest", "book", bookID, "error", err)
+	if err := s.st.SetBookDigestForFile(context.Background(), tee.digest(), file); err != nil {
+		s.log.Warn("book digest", "book", file.ID, "error", err)
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/vestigiumincaligne/polka/internal/importer"
 	"github.com/vestigiumincaligne/polka/internal/library"
@@ -250,6 +251,9 @@ func sanitizeFileName(name string) string {
 	}, strings.TrimSpace(name))
 	if len(name) > 120 {
 		name = name[:120]
+		for !utf8.ValidString(name) {
+			name = name[:len(name)-1]
+		}
 	}
 	return name
 }
@@ -406,7 +410,7 @@ func (s *Server) handleImportInpx(w http.ResponseWriter, r *http.Request) {
 	}
 
 	replace := r.FormValue("replace") == "1"
-	if n, err := s.st.BookCount(r.Context()); err != nil {
+	if n, err := s.st.CatalogCount(r.Context()); err != nil {
 		fail(http.StatusInternalServerError, err.Error())
 		return
 	} else if n > 0 && !replace {
@@ -482,6 +486,10 @@ func (s *Server) runImport(inpxPath string, replace bool, cleanup bool) {
 		s.log.Info("web import done", "books", stats.Books, "duration", stats.Duration)
 	}
 
+	if err := importer.ValidateInpx(inpxPath); err != nil {
+		finish(store.ImportStats{}, err)
+		return
+	}
 	if replace {
 		setPhase("clearing", 0)
 		if err := s.st.Clear(ctx); err != nil {
@@ -491,6 +499,9 @@ func (s *Server) runImport(inpxPath string, replace bool, cleanup bool) {
 	}
 
 	stats, err := importer.ImportInpx(ctx, s.log, s.st, inpxPath, setPhase)
+	if err == nil && !cleanup {
+		err = s.st.SetMeta(ctx, "last_inpx_path", inpxPath)
+	}
 	finish(stats, err)
 	if err == nil {
 		s.warnIfArchivesMissing(ctx)

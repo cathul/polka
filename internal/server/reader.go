@@ -2,7 +2,9 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -15,6 +17,7 @@ import (
 // readerCache keeps the last few parsed books in memory:
 // a reader navigates between chapters of one book, so there is no need to re-parse the file.
 type readerCache struct {
+	loadMu  sync.Mutex
 	mu      sync.Mutex
 	entries map[int64]*library.FB2Text
 	order   []int64
@@ -35,6 +38,7 @@ func (c *readerCache) put(id int64, text *library.FB2Text) {
 		c.entries = make(map[int64]*library.FB2Text, readerCacheSize)
 	}
 	if _, exists := c.entries[id]; exists {
+		c.entries[id] = text
 		return
 	}
 	for len(c.order) >= readerCacheSize {
@@ -47,20 +51,64 @@ func (c *readerCache) put(id int64, text *library.FB2Text) {
 
 // bookText returns the parsed book (from the cache or from disk).
 func (s *Server) bookText(r *http.Request, bookID int64) (*library.FB2Text, error) {
-	if text := s.reader.get(bookID); text != nil {
-		return text, nil
+	if s.lib == nil {
+		return nil, library.ErrNoFile
 	}
 	f, err := s.st.BookFile(r.Context(), bookID)
 	if err != nil {
 		return nil, err
 	}
-	imgURL := func(id string) string {
-		return fmt.Sprintf("/api/v1/read/%d/img/%s", bookID, id)
-	}
-	text, err := s.lib.Text(f.Folder, f.File, f.Ext, imgURL)
+	version, err := s.lib.SourceVersion(f.Folder, f.File, f.Ext)
 	if err != nil {
 		return nil, err
 	}
+	key := fmt.Sprintf("%q:%q:%q:%d:%q:%s", f.Folder, f.File, f.Ext, f.Size, f.LibID, version)
+	if text := s.reader.get(bookID); text != nil && text.SourceKey == key {
+		return text, nil
+	}
+	// Avoid parsing twice for the metadata and position requests of one opening.
+	s.reader.loadMu.Lock()
+	defer s.reader.loadMu.Unlock()
+	if text := s.reader.get(bookID); text != nil && text.SourceKey == key {
+		return text, nil
+	}
+	imgURL := func(id string) string { return fmt.Sprintf("/api/v1/read/%d/img/%s", bookID, id) }
+	var text *library.FB2Text
+	if strings.EqualFold(f.Ext, "fb2") {
+		reader, size, openErr := s.lib.Open(f.Folder, f.File, f.Ext)
+		if openErr != nil {
+			return nil, openErr
+		}
+		defer reader.Close()
+		tee := &digestTee{}
+		text, err = library.ParseFB2TextAnchored(io.TeeReader(reader, tee), imgURL)
+		if err == nil {
+			_, err = io.Copy(tee, reader)
+		}
+		if err == nil && tee.pos != size {
+			err = fmt.Errorf("incomplete FB2 read")
+		}
+		if err == nil {
+			text.Digest = tee.digest()
+		} else {
+			// Keep the existing lenient web reader for malformed/non-standard
+			// FB2 files, but never export their guessed XML coordinates.
+			text, err = s.lib.Text(f.Folder, f.File, f.Ext, imgURL)
+		}
+	} else {
+		text, err = s.lib.Text(f.Folder, f.File, f.Ext, imgURL)
+	}
+	if err != nil {
+		return nil, err
+	}
+	after, err := s.lib.SourceVersion(f.Folder, f.File, f.Ext)
+	if err != nil {
+		return nil, err
+	}
+	if version != after {
+		return nil, fmt.Errorf("book changed while reading; retry")
+	}
+	text.SourceKey = key
 	s.reader.put(bookID, text)
 	return text, nil
 }
@@ -127,15 +175,20 @@ func (s *Server) handleReadMeta(w http.ResponseWriter, r *http.Request) {
 				title = tr(lang, "reader.chapter", i+1)
 			}
 		}
-		chapters = append(chapters, map[string]any{"index": i, "title": title})
+		entry := map[string]any{"index": i, "title": title}
+		if text.Anchors != nil {
+			entry["textLength"] = text.Anchors.Lengths[i]
+		}
+		chapters = append(chapters, entry)
 	}
 	writeJSON(w, map[string]any{
-		"bookId":   bookID,
-		"format":   format,
-		"title":    d.Title,
-		"authors":  d.AuthorNames,
-		"chapters": chapters,
-		"notes":    text.Notes,
+		"bookId":    bookID,
+		"format":    format,
+		"title":     d.Title,
+		"authors":   d.AuthorNames,
+		"chapters":  chapters,
+		"notes":     text.Notes,
+		"fb2Digest": text.Digest,
 	})
 }
 
@@ -204,11 +257,23 @@ func (s *Server) handleReadProgress(w http.ResponseWriter, r *http.Request) {
 	}
 	u := s.currentUser(r)
 	if u == nil {
+		if r.Method == http.MethodDelete {
+			http.Error(w, "authentication required", http.StatusUnauthorized)
+			return
+		}
 		// Public mode without login: the position is stored in the browser.
 		writeJSON(w, map[string]any{"stored": false})
 		return
 	}
 
+	if r.Method == http.MethodDelete {
+		if err := s.users.DeleteProgress(r.Context(), u.ID, bookID); err != nil {
+			s.apiError(w, err)
+			return
+		}
+		writeJSON(w, map[string]any{"removed": true})
+		return
+	}
 	if r.Method == http.MethodPost {
 		var p auth.Progress
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&struct {
@@ -224,7 +289,16 @@ func (s *Server) handleReadProgress(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid progress", http.StatusBadRequest)
 			return
 		}
-		if err := s.users.SaveProgress(r.Context(), u.ID, bookID, p); err != nil {
+		var err error
+		if document, pointer := s.validateFB2Progress(r, bookID, &p); document != "" {
+			err = s.users.SaveFB2Progress(r.Context(), u.ID, bookID, p, document, pointer)
+		} else {
+			if strings.HasPrefix(p.Locator, "fb2:") {
+				p.Locator = "web:chapters"
+			}
+			err = s.users.SaveProgress(r.Context(), u.ID, bookID, p)
+		}
+		if err != nil {
 			s.apiError(w, err)
 			return
 		}
@@ -233,12 +307,21 @@ func (s *Server) handleReadProgress(w http.ResponseWriter, r *http.Request) {
 	}
 
 	p, err := s.users.GetProgress(r.Context(), u.ID, bookID)
-	if err != nil {
-		writeJSON(w, map[string]any{"stored": true, "chapter": 0, "position": 0, "progress": 0})
+	if errors.Is(err, auth.ErrNotFound) {
+		writeJSON(w, map[string]any{"stored": true, "exists": false, "chapter": 0, "position": 0, "progress": 0})
 		return
 	}
-	writeJSON(w, map[string]any{
-		"stored": true, "chapter": p.Chapter, "position": p.Position,
-		"progress": p.Overall, "locator": p.Locator,
-	})
+	if err != nil {
+		s.apiError(w, err)
+		return
+	}
+	result := map[string]any{"stored": true, "exists": true, "chapter": p.Chapter, "position": p.Position, "progress": p.Overall, "locator": p.Locator}
+	if r.URL.Query().Get("resolve") == "1" {
+		if location, ratio := s.resolveFB2Progress(r, u.ID, bookID, p); location != nil {
+			result["anchor"] = location
+			result["chapter"] = location.Chapter
+			result["position"] = ratio
+		}
+	}
+	writeJSON(w, result)
 }

@@ -57,43 +57,71 @@ const AdminLibraryPage = () => {
 
   // --- inpx import ---
   const [inpxFile, setInpxFile] = useState(null);
+  const inpxInput = useRef(null);
   const [inpxPath, setInpxPath] = useState("");
+  const inpxPathEdited = useRef(false);
   const [replace, setReplace] = useState(false);
   const [status, setStatus] = useState(null);
   const polling = useRef(null);
+  const importMounted = useRef(false);
+  const [importStarting, setImportStarting] = useState(false);
+  const importRunning = importStarting || Boolean(status?.running);
 
-  const refreshStatus = () =>
-    importStatus()
-      .then((st) => {
-        setStatus(st);
-        if (!st.running && polling.current) {
-          clearInterval(polling.current);
-          polling.current = null;
-        }
-      })
-      .catch(() => {});
-
-  useEffect(() => {
-    refreshStatus();
-    return () => polling.current && clearInterval(polling.current);
-  }, []);
-
-  const startImport = () => {
-    if (!inpxFile && !inpxPath.trim()) return;
-    if (replace && !confirm(t("admin.import.confirm"))) return;
-    importInpx({ file: inpxFile, path: inpxPath.trim(), replace })
-      .then(() => {
-        setInpxFile(null);
-        setInpxPath("");
-        refreshStatus();
-        polling.current = setInterval(refreshStatus, 1000);
-      })
-      .catch((err) => {
-        alert(err.status === 409 ? t("admin.import.conflict") : t("admin.import.fail"));
-      });
+  const stopImportPolling = () => {
+    if (polling.current) clearInterval(polling.current);
+    polling.current = null;
   };
 
-  const importRunning = Boolean(status?.running);
+  const refreshStatus = () => importStatus()
+    .then((next) => {
+      if (!importMounted.current) return;
+      setStatus(next);
+      if (!next.running) stopImportPolling();
+    })
+    .catch(() => {});
+
+  useEffect(() => {
+    importMounted.current = true;
+    refreshStatus();
+    return () => {
+      importMounted.current = false;
+      stopImportPolling();
+    };
+  }, []);
+
+  const selectInpxFile = (file) => {
+    setInpxFile(file);
+    inpxPathEdited.current = true;
+    setInpxPath("");
+  };
+
+  const changeInpxPath = (path) => {
+    inpxPathEdited.current = true;
+    setInpxPath(path);
+    setInpxFile(null);
+    if (inpxInput.current) inpxInput.current.value = "";
+  };
+
+  const startImport = async () => {
+    if (importRunning || (!inpxFile && !inpxPath.trim())) return;
+    if (replace && !confirm(t("admin.import.confirm"))) return;
+    setImportStarting(true);
+    try {
+      await importInpx({ file: inpxFile, path: inpxPath.trim(), replace });
+      if (!importMounted.current) return;
+      setInpxFile(null);
+      if (inpxInput.current) inpxInput.current.value = "";
+      stopImportPolling();
+      polling.current = setInterval(refreshStatus, 1000);
+      await refreshStatus();
+    } catch (err) {
+      if (importMounted.current) {
+        alert(err.status === 409 ? t("admin.import.conflict") : t("admin.import.fail"));
+      }
+    } finally {
+      if (importMounted.current) setImportStarting(false);
+    }
+  };
 
   // --- Sources for external ratings and similar books ---
   const [enrichment, setEnrichment] = useState(null);
@@ -101,6 +129,7 @@ const AdminLibraryPage = () => {
   const [tastediveKey, setTastediveKey] = useState("");
   const [opdsEnabled, setOpdsEnabled] = useState(true);
   const [opdsCopied, setOpdsCopied] = useState(false);
+  const [conversionEnabled, setConversionEnabled] = useState(false);
   const [smtp, setSmtp] = useState(null);
   const [smtpPwd, setSmtpPwd] = useState("");
   const [smtpMsg, setSmtpMsg] = useState(null);
@@ -108,17 +137,22 @@ const AdminLibraryPage = () => {
   const [colSources, setColSources] = useState(null);
 
   useEffect(() => {
+    let cancelled = false;
     fetchSettings()
       .then((res) => {
+        if (cancelled) return;
         setEnrichment(res.enrichment ?? null);
         setColSources(res.collectionSources ?? []);
         setSimilar(res.similar ?? null);
         setTastediveKey(res.tastediveKey ?? "");
         setOpdsEnabled(res.opdsEnabled !== false);
         setSmtp(res.smtp ?? { security: "starttls", port: 587 });
+        setConversionEnabled(Boolean(res.conversionEnabled));
         setLibrary(res.library ?? null);
+        if (!inpxPathEdited.current) setInpxPath(res.lastInpxPath ?? "");
       })
-      .catch(() => setEnrichment(null));
+      .catch(() => { if (!cancelled) setEnrichment(null); });
+    return () => { cancelled = true; };
   }, []);
 
   // An empty / missing library root almost always means the mounted path and
@@ -174,7 +208,7 @@ const AdminLibraryPage = () => {
     const payload = { ...smtp, port: Number(smtp.port) || 0 };
     if (smtpPwd) payload.password = smtpPwd;
     setSmtpMsg(null);
-    saveSettings({ smtp: payload })
+    saveSettings({ smtp: payload, conversionEnabled })
       .then((res) => {
         setSmtp(res.smtp ?? smtp);
         setSmtpPwd("");
@@ -433,7 +467,8 @@ const AdminLibraryPage = () => {
           <input
             type="file"
             accept=".inpx"
-            onChange={(e) => setInpxFile(e.target.files?.[0] ?? null)}
+            ref={inpxInput}
+            onChange={(e) => selectInpxFile(e.target.files?.[0] ?? null)}
             disabled={importRunning}
           />
           <label className="library-admin__replace">
@@ -461,7 +496,7 @@ const AdminLibraryPage = () => {
             type="text"
             placeholder={t("admin.import.pathPlaceholder")}
             value={inpxPath}
-            onChange={(e) => setInpxPath(e.target.value)}
+            onChange={(e) => changeInpxPath(e.target.value)}
             disabled={importRunning}
           />
           <p className="library-admin__hint">{t("admin.import.pathHint")}</p>
@@ -587,6 +622,10 @@ const AdminLibraryPage = () => {
             <label className="library-admin__source library-admin__opds-toggle">
               <input type="checkbox" checked={Boolean(smtp.enabled)} onChange={(e) => smtpField("enabled", e.target.checked)} />
               <span className="library-admin__source-name">{t("admin.smtp.enable")}</span>
+            </label>
+            <label className="library-admin__source">
+              <input type="checkbox" checked={conversionEnabled} onChange={(e) => setConversionEnabled(e.target.checked)} />
+              <span>{t("admin.conversion.enable")}</span>
             </label>
             <div className="library-admin__smtp-grid">
               <input placeholder={t("admin.smtp.host")} value={smtp.host || ""} onChange={(e) => smtpField("host", e.target.value)} />

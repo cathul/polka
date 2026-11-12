@@ -16,8 +16,11 @@ import (
 
 // FB2Text is the book's full text split into chapters, plus footnotes.
 type FB2Text struct {
-	Chapters []FB2Chapter
-	Notes    map[string]string // footnote id -> HTML
+	Anchors   *FB2Anchors
+	Digest    string
+	SourceKey string
+	Chapters  []FB2Chapter
+	Notes     map[string]string // footnote id -> HTML
 }
 
 type FB2Chapter struct {
@@ -29,9 +32,18 @@ type FB2Chapter struct {
 // sections of the first <body>; <body name="notes"> goes into the footnotes map.
 // imgURL builds an image URL from a <binary> id.
 func ParseFB2Text(r io.Reader, imgURL func(id string) string) (*FB2Text, error) {
-	dec := xml.NewDecoder(r)
+	return parseFB2Text(r, imgURL, false)
+}
+
+func ParseFB2TextAnchored(r io.Reader, imgURL func(string) string) (*FB2Text, error) {
+	return parseFB2Text(r, imgURL, true)
+}
+
+func parseFB2Text(r io.Reader, imgURL func(string) string, anchored bool) (*FB2Text, error) {
+	dec := &fb2TextDecoder{Decoder: xml.NewDecoder(r), enabled: anchored, candidates: map[string]string{}, invalid: map[string]bool{}, first: map[string]bool{}, ambiguous: map[string]bool{}}
+
 	dec.CharsetReader = charset.NewReaderLabel
-	dec.Strict = false
+	dec.Strict = anchored
 
 	c := &fb2Converter{imgURL: imgURL}
 	res := &FB2Text{Notes: map[string]string{}}
@@ -67,9 +79,11 @@ func ParseFB2Text(r io.Reader, imgURL func(id string) string) (*FB2Text, error) 
 			}
 		case "binary":
 			// Binary data comes after the text — nothing left to read.
+			dec.index(res)
 			return res, nil
 		}
 	}
+	dec.index(res)
 	return res, nil
 }
 
@@ -91,7 +105,7 @@ func attrValue(e xml.StartElement, name string) string {
 const minSubChapters = 3
 
 // parseMainBody collects the chapters. Content before the first section becomes the "preface".
-func (c *fb2Converter) parseMainBody(dec *xml.Decoder, res *FB2Text) error {
+func (c *fb2Converter) parseMainBody(dec *fb2TextDecoder, res *FB2Text) error {
 	var preface strings.Builder
 	for {
 		tok, err := dec.Token()
@@ -150,7 +164,7 @@ func (c *fb2Converter) parseMainBody(dec *xml.Decoder, res *FB2Text) error {
 
 // convertSectionSplit parses a top-level section, returning its own
 // content and its first-level nested sections separately.
-func (c *fb2Converter) convertSectionSplit(dec *xml.Decoder) (string, string, []FB2Chapter, error) {
+func (c *fb2Converter) convertSectionSplit(dec *fb2TextDecoder) (string, string, []FB2Chapter, error) {
 	var title string
 	var own strings.Builder
 	var subs []FB2Chapter
@@ -191,7 +205,7 @@ func (c *fb2Converter) convertSectionSplit(dec *xml.Decoder) (string, string, []
 	}
 }
 
-func (c *fb2Converter) parseNotesBody(dec *xml.Decoder, res *FB2Text) error {
+func (c *fb2Converter) parseNotesBody(dec *fb2TextDecoder, res *FB2Text) error {
 	for {
 		tok, err := dec.Token()
 		if err != nil {
@@ -222,7 +236,7 @@ func (c *fb2Converter) parseNotesBody(dec *xml.Decoder, res *FB2Text) error {
 
 // convertSection reads a section to its end; returns the title (as text)
 // and the content HTML. Nested sections are merged in with subheadings.
-func (c *fb2Converter) convertSection(dec *xml.Decoder) (string, string, error) {
+func (c *fb2Converter) convertSection(dec *fb2TextDecoder) (string, string, error) {
 	var title string
 	var sb strings.Builder
 	for {
@@ -266,7 +280,7 @@ func (c *fb2Converter) convertSection(dec *xml.Decoder) (string, string, error) 
 }
 
 // collectTitle gathers the title text (lines joined with a separator).
-func (c *fb2Converter) collectTitle(dec *xml.Decoder) (string, error) {
+func (c *fb2Converter) collectTitle(dec *fb2TextDecoder) (string, error) {
 	var parts []string
 	depth := 1
 	for depth > 0 {
@@ -315,7 +329,7 @@ var classTags = map[string][2]string{
 }
 
 // convertElement writes the HTML of element start (and its whole subtree) to sb.
-func (c *fb2Converter) convertElement(dec *xml.Decoder, start xml.StartElement, sb *strings.Builder) error {
+func (c *fb2Converter) convertElement(dec *fb2TextDecoder, start xml.StartElement, sb *strings.Builder) error {
 	name := start.Name.Local
 	switch name {
 	case "empty-line":
@@ -387,7 +401,7 @@ func (c *fb2Converter) convertElement(dec *xml.Decoder, start xml.StartElement, 
 }
 
 // convertChildren processes the current element's subtree until its end.
-func (c *fb2Converter) convertChildren(dec *xml.Decoder, sb *strings.Builder) error {
+func (c *fb2Converter) convertChildren(dec *fb2TextDecoder, sb *strings.Builder) error {
 	for {
 		tok, err := dec.Token()
 		if err != nil {
@@ -401,7 +415,7 @@ func (c *fb2Converter) convertChildren(dec *xml.Decoder, sb *strings.Builder) er
 		case xml.EndElement:
 			return nil
 		case xml.CharData:
-			sb.WriteString(escape(string(t)))
+			dec.writeText(sb, string(t))
 		}
 	}
 }

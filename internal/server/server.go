@@ -37,9 +37,10 @@ type Server struct {
 	basic   basicCache           // verified Basic credentials (OPDS)
 	genres  genreCache           // genre counters for search
 
-	loginLimiter *rateLimiter // throttle password guessing
-	guestLimiter *rateLimiter // throttle demo guest creation
-	secret       []byte       // key for secrets at rest (SMTP password)
+	loginLimiter  *rateLimiter  // throttle password guessing
+	guestLimiter  *rateLimiter  // throttle demo guest creation
+	deliverySlots chan struct{} // per-instance email/conversion limit
+	secret        []byte        // key for secrets at rest (SMTP password)
 }
 
 func New(cfg *config.Config, log *slog.Logger, st *store.Store, lib *library.Library, users *auth.Service, sync *syncer.Syncer, webFS fs.FS) *http.Server {
@@ -47,9 +48,10 @@ func New(cfg *config.Config, log *slog.Logger, st *store.Store, lib *library.Lib
 		cfg: cfg, log: log, st: st, lib: lib, users: users, sync: sync,
 		enrich: enrich.New(filepath.Join(cfg.DataDir, "enrichment.json")),
 		// 10 failed logins / 5 min / IP; 20 new guests / min / IP.
-		loginLimiter: newRateLimiter(10, 5*time.Minute),
-		guestLimiter: newRateLimiter(20, time.Minute),
-		secret:       loadSecretKey(cfg.DataDir),
+		loginLimiter:  newRateLimiter(10, 5*time.Minute),
+		guestLimiter:  newRateLimiter(20, time.Minute),
+		secret:        loadSecretKey(cfg.DataDir),
+		deliverySlots: make(chan struct{}, 2),
 	}
 	if cfg.DataDir == "" {
 		// tests without a data directory: collections are unavailable
@@ -163,6 +165,7 @@ func New(cfg *config.Config, log *slog.Logger, st *store.Store, lib *library.Lib
 		mux.HandleFunc("GET /opds/genre/{code}", s.opdsAuth(s.handleOpdsGenre))
 		mux.HandleFunc("GET /opds/search", s.opdsAuth(s.handleOpdsSearch))
 		mux.HandleFunc("GET /opds/reading", s.opdsAuth(s.handleOpdsReading))
+		mux.HandleFunc("GET /opds/wishlist", s.opdsAuth(s.handleOpdsWishlist))
 
 		// Online reading
 		mux.HandleFunc("GET /api/v1/read/{id}", s.protected(s.handleReadMeta))
@@ -170,6 +173,7 @@ func New(cfg *config.Config, log *slog.Logger, st *store.Store, lib *library.Lib
 		mux.HandleFunc("GET /api/v1/read/{id}/img/{imgId}", s.protected(s.handleReadImage))
 		mux.HandleFunc("GET /api/v1/read/{id}/progress", s.protected(s.handleReadProgress))
 		mux.HandleFunc("POST /api/v1/read/{id}/progress", s.protected(s.handleReadProgress))
+		mux.HandleFunc("DELETE /api/v1/read/{id}/progress", s.protected(s.maybeSyncAfter(s.handleReadProgress)))
 
 		// Frontend v2 contract: main/getBooks/*
 		mux.HandleFunc("GET /main/getBooks/getConfig", s.protected(s.handleGetConfig))
@@ -212,6 +216,8 @@ func New(cfg *config.Config, log *slog.Logger, st *store.Store, lib *library.Lib
 	// Send a book to an e-reader by email
 	mux.HandleFunc("GET /api/v1/me/reader-prefs", s.protected(s.handleReaderPrefs))
 	mux.HandleFunc("POST /api/v1/me/reader-prefs", s.protected(s.handleReaderPrefs))
+	mux.HandleFunc("GET /api/v1/me/search-settings", s.protected(s.handleSearchSettings))
+	mux.HandleFunc("POST /api/v1/me/search-settings", s.protected(s.handleSearchSettings))
 	mux.HandleFunc("GET /api/v1/me/reader-email", s.protected(s.handleReaderEmail))
 	mux.HandleFunc("POST /api/v1/me/reader-email", s.protected(s.handleReaderEmail))
 	mux.HandleFunc("POST /api/v1/books/{id}/send", s.protected(s.handleSendBook))
